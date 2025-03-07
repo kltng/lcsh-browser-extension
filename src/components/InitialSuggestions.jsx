@@ -13,14 +13,17 @@ import {
     Alert,
     Card,
     CardContent,
-    CardActions
+    CardActions,
+    Grid
 } from '@mui/material';
 import { useAppContext } from '../context/AppContext';
 import { scrapeMultipleTerms } from '../services/locService';
+import ImageIcon from '@mui/icons-material/Image';
 
 const InitialSuggestions = () => {
     const {
         initialSuggestions,
+        bibliographicInfo,
         setActiveStep,
         setScrapedResults,
         setIsLoading,
@@ -94,6 +97,57 @@ const InitialSuggestions = () => {
                     <Typography variant="body2" color="text.secondary" paragraph>
                         {initialSuggestions.subjectAnalysis}
                     </Typography>
+                </CardContent>
+            </Card>
+
+            {/* Display bibliographic information summary */}
+            <Card variant="outlined" sx={{ mb: 3 }}>
+                <CardContent>
+                    <Typography variant="subtitle1" gutterBottom>
+                        Bibliographic Information Used
+                    </Typography>
+
+                    <Grid container spacing={2}>
+                        <Grid item xs={12} sm={6}>
+                            <Typography variant="body2">
+                                <strong>Title:</strong> {bibliographicInfo.title || 'N/A'}
+                            </Typography>
+                        </Grid>
+
+                        <Grid item xs={12} sm={6}>
+                            <Typography variant="body2">
+                                <strong>Author:</strong> {bibliographicInfo.author || 'N/A'}
+                            </Typography>
+                        </Grid>
+
+                        {bibliographicInfo.abstract && (
+                            <Grid item xs={12}>
+                                <Typography variant="body2">
+                                    <strong>Abstract:</strong> {bibliographicInfo.abstract.substring(0, 100)}
+                                    {bibliographicInfo.abstract.length > 100 ? '...' : ''}
+                                </Typography>
+                            </Grid>
+                        )}
+
+                        {bibliographicInfo.images && bibliographicInfo.images.length > 0 && (
+                            <Grid item xs={12}>
+                                <Typography variant="body2" sx={{ display: 'flex', alignItems: 'center' }}>
+                                    <ImageIcon fontSize="small" sx={{ mr: 0.5 }} />
+                                    <strong>Images:</strong> {bibliographicInfo.images.length} image(s) uploaded
+                                </Typography>
+                                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mt: 1 }}>
+                                    {bibliographicInfo.images.map((image, index) => (
+                                        <Chip
+                                            key={index}
+                                            label={image.name || `Image ${index + 1}`}
+                                            size="small"
+                                            variant="outlined"
+                                        />
+                                    ))}
+                                </Box>
+                            </Grid>
+                        )}
+                    </Grid>
                 </CardContent>
             </Card>
 

@@ -60,24 +60,9 @@ const constructSystemPrompt = (userRules) => {
 export const generateLcshSuggestions = async (apiKey, bibliographicInfo, systemPromptRules) => {
   const systemPrompt = constructSystemPrompt(systemPromptRules);
   
-  // Construct the user message from bibliographic information
-  const userMessage = `
-Please suggest Library of Congress Subject Headings (LCSH) for the following work:
-
-Title: ${bibliographicInfo.title || 'N/A'}
-Author: ${bibliographicInfo.author || 'N/A'}
-${bibliographicInfo.abstract ? `Abstract: ${bibliographicInfo.abstract}` : ''}
-${bibliographicInfo.tableOfContents ? `Table of Contents: ${bibliographicInfo.tableOfContents}` : ''}
-${bibliographicInfo.notes ? `Additional Notes: ${bibliographicInfo.notes}` : ''}
-  `;
-
+  // Construct the request body
   const requestBody = {
-    contents: [
-      {
-        role: "user",
-        parts: [{ text: userMessage }]
-      }
-    ],
+    contents: [],
     systemInstruction: { parts: [{ text: systemPrompt }] },
     generationConfig: {
       temperature: 0.2,
@@ -87,9 +72,42 @@ ${bibliographicInfo.notes ? `Additional Notes: ${bibliographicInfo.notes}` : ''}
     }
   };
 
+  // Add text content
+  const textContent = `
+Please suggest Library of Congress Subject Headings (LCSH) for the following work:
+
+Title: ${bibliographicInfo.title || 'N/A'}
+Author: ${bibliographicInfo.author || 'N/A'}
+${bibliographicInfo.abstract ? `Abstract: ${bibliographicInfo.abstract}` : ''}
+${bibliographicInfo.tableOfContents ? `Table of Contents: ${bibliographicInfo.tableOfContents}` : ''}
+${bibliographicInfo.notes ? `Additional Notes: ${bibliographicInfo.notes}` : ''}
+  `;
+
+  // Create the user message parts
+  const parts = [{ text: textContent }];
+
+  // Add image parts if available
+  if (bibliographicInfo.images && bibliographicInfo.images.length > 0) {
+    bibliographicInfo.images.forEach(image => {
+      parts.push({
+        inlineData: {
+          mimeType: image.type,
+          data: image.data.split(',')[1] // Remove the data URL prefix
+        }
+      });
+    });
+  }
+
+  // Add the user message to the contents
+  requestBody.contents.push({
+    role: "user",
+    parts: parts
+  });
+
   try {
+    // Use Gemini 2.0 Flash model instead of Gemini 1.5 Pro Vision
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${apiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
       {
         method: 'POST',
         headers: {

@@ -18,7 +18,10 @@ const DEFAULT_SYSTEM_PROMPT_RULES = `# LCSH Selection Rules
 7. For works about multiple topics, assign a heading for each significant topic.
 8. For works of literature, assign genre/form terms as appropriate.
 9. For biographies, assign a heading for the subject of the biography.
-10. For historical works, assign chronological subdivisions as appropriate.`;
+10. For historical works, assign chronological subdivisions as appropriate.
+11. If images are provided, analyze them for additional bibliographic information.
+12. For book covers or title pages, extract relevant subject information.
+13. Use Gemini 2.0 Flash capabilities to process both text and image content.`;
 
 export const AppProvider = ({ children }) => {
     // State for bibliographic information
@@ -28,6 +31,7 @@ export const AppProvider = ({ children }) => {
         abstract: '',
         tableOfContents: '',
         notes: '',
+        images: []
     });
 
     // State for system prompt
@@ -78,10 +82,21 @@ export const AppProvider = ({ children }) => {
 
     // Save conversation to history
     const saveConversation = (conversation) => {
+        // Remove large image data before saving to storage
+        const conversationToSave = { ...conversation };
+        if (conversationToSave.bibliographicInfo && conversationToSave.bibliographicInfo.images) {
+            // Replace full image data with just metadata to save space
+            conversationToSave.bibliographicInfo.images = conversationToSave.bibliographicInfo.images.map(img => ({
+                name: img.name,
+                type: img.type,
+                size: img.size || (img.data ? img.data.length : 0)
+            }));
+        }
+
         const updatedHistory = [...conversationHistory, {
             id: Date.now(),
             timestamp: new Date().toISOString(),
-            ...conversation
+            ...conversationToSave
         }];
 
         setConversationHistory(updatedHistory);
