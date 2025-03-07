@@ -18,14 +18,18 @@ import {
     AccordionSummary,
     AccordionDetails,
     Link,
-    Grid
+    Grid,
+    Tooltip
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { useAppContext } from '../context/AppContext';
+import SimilarityScore from './SimilarityScore';
+import { findBestMatch, calculateSimilarity } from '../utils/similarityUtils';
 
 const ScrapedResults = () => {
     const {
         initialSuggestions,
+        bibliographicInfo,
         scrapedResults,
         setActiveStep,
         setFinalRecommendations,
@@ -36,6 +40,8 @@ const ScrapedResults = () => {
     } = useAppContext();
 
     const [processedResults, setProcessedResults] = useState({});
+    const [similarityScores, setSimilarityScores] = useState({});
+    const [averageSimilarity, setAverageSimilarity] = useState(0);
 
     // Process the scraped results when the component mounts
     useEffect(() => {
@@ -43,6 +49,9 @@ const ScrapedResults = () => {
 
         // Process the scraped results to make them easier to display
         const processed = {};
+        const scores = {};
+        let totalScore = 0;
+        let validTerms = 0;
 
         Object.entries(scrapedResults).forEach(([term, result]) => {
             processed[term] = {
@@ -50,9 +59,24 @@ const ScrapedResults = () => {
                 error: result?.error || 'No results found',
                 items: result?.items || []
             };
+
+            // Calculate similarity score for this term
+            if (result?.items && result.items.length > 0) {
+                const bestMatch = findBestMatch(term, result.items);
+                scores[term] = bestMatch.similarity;
+                totalScore += bestMatch.similarity;
+                validTerms++;
+            } else {
+                scores[term] = 0;
+            }
         });
 
+        // Calculate average similarity score
+        const avgScore = validTerms > 0 ? Math.round(totalScore / validTerms) : 0;
+
         setProcessedResults(processed);
+        setSimilarityScores(scores);
+        setAverageSimilarity(avgScore);
     }, [scrapedResults]);
 
     // Handle back button
@@ -63,13 +87,24 @@ const ScrapedResults = () => {
     // Handle continue button
     const handleContinue = () => {
         try {
-            // Combine the initial suggestions with the scraped results
+            // Combine the initial suggestions with the scraped results and similarity scores
             const finalRecommendations = initialSuggestions.recommendedTerms.map(term => {
                 const scrapedResult = processedResults[term.term] || { items: [] };
+                const similarity = similarityScores[term.term] || 0;
+
+                // Find the best match from scraped results
+                let bestMatch = null;
+                if (scrapedResult.items && scrapedResult.items.length > 0) {
+                    const { item } = findBestMatch(term.term, scrapedResult.items);
+                    bestMatch = item;
+                }
+
                 return {
                     ...term,
                     scrapedItems: scrapedResult.items || [],
-                    verified: scrapedResult.items && scrapedResult.items.length > 0
+                    verified: scrapedResult.items && scrapedResult.items.length > 0,
+                    similarity,
+                    bestMatch
                 };
             });
 
@@ -115,6 +150,25 @@ const ScrapedResults = () => {
                 </Alert>
             )}
 
+            {/* Overall similarity score */}
+            <Card variant="outlined" sx={{ mb: 3 }}>
+                <CardContent>
+                    <Typography variant="subtitle1" gutterBottom>
+                        Overall Validation Score
+                    </Typography>
+                    <Box sx={{ maxWidth: 400, mx: 'auto', my: 2 }}>
+                        <SimilarityScore
+                            score={averageSimilarity}
+                            label="Average similarity between suggested terms and LOC results"
+                            showTooltip={false}
+                        />
+                    </Box>
+                    <Typography variant="body2" color="text.secondary" align="center">
+                        This score indicates how well the suggested terms match the actual Library of Congress Subject Headings.
+                    </Typography>
+                </CardContent>
+            </Card>
+
             {Object.entries(processedResults).map(([term, result], index) => (
                 <Accordion key={index} defaultExpanded={index === 0}>
                     <AccordionSummary
@@ -124,116 +178,153 @@ const ScrapedResults = () => {
                     >
                         <Box sx={{ display: 'flex', alignItems: 'center', width: '100%' }}>
                             <Typography sx={{ flexGrow: 1 }}>{term}</Typography>
-                            {result && result.items && result.items.length > 0 ? (
-                                <Chip
-                                    label={`${result.items.length} results`}
-                                    color="success"
-                                    size="small"
-                                    sx={{ ml: 2 }}
-                                />
-                            ) : (
-                                <Chip
-                                    label="No results"
-                                    color="error"
-                                    size="small"
-                                    sx={{ ml: 2 }}
-                                />
-                            )}
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 180 }}>
+                                {result && result.items && result.items.length > 0 ? (
+                                    <>
+                                        <Chip
+                                            label={`${result.items.length} results`}
+                                            color="success"
+                                            size="small"
+                                        />
+                                        <Tooltip title={`Similarity score: ${similarityScores[term]}%`}>
+                                            <Chip
+                                                label={`${similarityScores[term]}% match`}
+                                                color={similarityScores[term] >= 70 ? "success" : similarityScores[term] >= 50 ? "warning" : "error"}
+                                                size="small"
+                                            />
+                                        </Tooltip>
+                                    </>
+                                ) : (
+                                    <Chip
+                                        label="No results"
+                                        color="error"
+                                        size="small"
+                                    />
+                                )}
+                            </Box>
                         </Box>
                     </AccordionSummary>
                     <AccordionDetails>
                         {result && result.items && result.items.length > 0 ? (
-                            <List>
-                                {result.items.map((item, itemIndex) => (
-                                    <ListItem key={itemIndex} divider>
-                                        <Grid container spacing={2}>
-                                            <Grid item xs={12}>
-                                                <Typography variant="subtitle1">
-                                                    {item.heading}
-                                                </Typography>
-                                                {item.uri && (
-                                                    <Link
-                                                        href={`http://id.loc.gov${item.uri}`}
-                                                        target="_blank"
-                                                        rel="noopener noreferrer"
-                                                    >
-                                                        View on LOC
-                                                    </Link>
-                                                )}
-                                            </Grid>
+                            <>
+                                <Box sx={{ mb: 3 }}>
+                                    <Typography variant="subtitle2" gutterBottom>
+                                        Similarity Score
+                                    </Typography>
+                                    <Box sx={{ maxWidth: 300 }}>
+                                        <SimilarityScore score={similarityScores[term]} />
+                                    </Box>
+                                </Box>
 
-                                            {item.details && (
-                                                <Grid item xs={12}>
-                                                    <Typography variant="body2" color="text.secondary">
-                                                        {item.details}
-                                                    </Typography>
-                                                </Grid>
-                                            )}
+                                <Typography variant="subtitle2" gutterBottom>
+                                    LOC Results
+                                </Typography>
+                                <List>
+                                    {result.items.map((item, itemIndex) => {
+                                        // Calculate individual similarity for this item
+                                        const itemSimilarity = calculateSimilarity(term, item.heading);
 
-                                            {item.datasetType && (
-                                                <Grid item xs={12} sm={6}>
-                                                    <Typography variant="caption" color="text.secondary">
-                                                        Dataset Type: {item.datasetType}
-                                                    </Typography>
-                                                </Grid>
-                                            )}
+                                        return (
+                                            <ListItem key={itemIndex} divider>
+                                                <Grid container spacing={2}>
+                                                    <Grid item xs={12} sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                                                        <Box>
+                                                            <Typography variant="subtitle1">
+                                                                {item.heading}
+                                                            </Typography>
+                                                            {item.uri && (
+                                                                <Link
+                                                                    href={`http://id.loc.gov${item.uri}`}
+                                                                    target="_blank"
+                                                                    rel="noopener noreferrer"
+                                                                >
+                                                                    View on LOC
+                                                                </Link>
+                                                            )}
+                                                        </Box>
+                                                        <Tooltip title={`Similarity to "${term}"`}>
+                                                            <Chip
+                                                                label={`${itemSimilarity}% match`}
+                                                                color={itemSimilarity >= 70 ? "success" : itemSimilarity >= 50 ? "warning" : "error"}
+                                                                size="small"
+                                                            />
+                                                        </Tooltip>
+                                                    </Grid>
 
-                                            {item.identifier && (
-                                                <Grid item xs={12} sm={6}>
-                                                    <Typography variant="caption" color="text.secondary">
-                                                        Identifier: {item.identifier}
-                                                    </Typography>
-                                                </Grid>
-                                            )}
+                                                    {item.details && (
+                                                        <Grid item xs={12}>
+                                                            <Typography variant="body2" color="text.secondary">
+                                                                {item.details}
+                                                            </Typography>
+                                                        </Grid>
+                                                    )}
 
-                                            {item.broaderTerms && item.broaderTerms.length > 0 && (
-                                                <Grid item xs={12} sm={4}>
-                                                    <Typography variant="caption" color="text.secondary">
-                                                        Broader Terms:
-                                                    </Typography>
-                                                    <List dense>
-                                                        {item.broaderTerms.map((term, termIndex) => (
-                                                            <ListItem key={termIndex} dense>
-                                                                <ListItemText primary={term} />
-                                                            </ListItem>
-                                                        ))}
-                                                    </List>
-                                                </Grid>
-                                            )}
+                                                    {item.datasetType && (
+                                                        <Grid item xs={12} sm={6}>
+                                                            <Typography variant="caption" color="text.secondary">
+                                                                Dataset Type: {item.datasetType}
+                                                            </Typography>
+                                                        </Grid>
+                                                    )}
 
-                                            {item.narrowerTerms && item.narrowerTerms.length > 0 && (
-                                                <Grid item xs={12} sm={4}>
-                                                    <Typography variant="caption" color="text.secondary">
-                                                        Narrower Terms:
-                                                    </Typography>
-                                                    <List dense>
-                                                        {item.narrowerTerms.map((term, termIndex) => (
-                                                            <ListItem key={termIndex} dense>
-                                                                <ListItemText primary={term} />
-                                                            </ListItem>
-                                                        ))}
-                                                    </List>
-                                                </Grid>
-                                            )}
+                                                    {item.identifier && (
+                                                        <Grid item xs={12} sm={6}>
+                                                            <Typography variant="caption" color="text.secondary">
+                                                                Identifier: {item.identifier}
+                                                            </Typography>
+                                                        </Grid>
+                                                    )}
 
-                                            {item.relatedTerms && item.relatedTerms.length > 0 && (
-                                                <Grid item xs={12} sm={4}>
-                                                    <Typography variant="caption" color="text.secondary">
-                                                        Related Terms:
-                                                    </Typography>
-                                                    <List dense>
-                                                        {item.relatedTerms.map((term, termIndex) => (
-                                                            <ListItem key={termIndex} dense>
-                                                                <ListItemText primary={term} />
-                                                            </ListItem>
-                                                        ))}
-                                                    </List>
+                                                    {item.broaderTerms && item.broaderTerms.length > 0 && (
+                                                        <Grid item xs={12} sm={4}>
+                                                            <Typography variant="caption" color="text.secondary">
+                                                                Broader Terms:
+                                                            </Typography>
+                                                            <List dense>
+                                                                {item.broaderTerms.map((term, termIndex) => (
+                                                                    <ListItem key={termIndex} dense>
+                                                                        <ListItemText primary={term} />
+                                                                    </ListItem>
+                                                                ))}
+                                                            </List>
+                                                        </Grid>
+                                                    )}
+
+                                                    {item.narrowerTerms && item.narrowerTerms.length > 0 && (
+                                                        <Grid item xs={12} sm={4}>
+                                                            <Typography variant="caption" color="text.secondary">
+                                                                Narrower Terms:
+                                                            </Typography>
+                                                            <List dense>
+                                                                {item.narrowerTerms.map((term, termIndex) => (
+                                                                    <ListItem key={termIndex} dense>
+                                                                        <ListItemText primary={term} />
+                                                                    </ListItem>
+                                                                ))}
+                                                            </List>
+                                                        </Grid>
+                                                    )}
+
+                                                    {item.relatedTerms && item.relatedTerms.length > 0 && (
+                                                        <Grid item xs={12} sm={4}>
+                                                            <Typography variant="caption" color="text.secondary">
+                                                                Related Terms:
+                                                            </Typography>
+                                                            <List dense>
+                                                                {item.relatedTerms.map((term, termIndex) => (
+                                                                    <ListItem key={termIndex} dense>
+                                                                        <ListItemText primary={term} />
+                                                                    </ListItem>
+                                                                ))}
+                                                            </List>
+                                                        </Grid>
+                                                    )}
                                                 </Grid>
-                                            )}
-                                        </Grid>
-                                    </ListItem>
-                                ))}
-                            </List>
+                                            </ListItem>
+                                        );
+                                    })}
+                                </List>
+                            </>
                         ) : (
                             <Typography color="text.secondary">
                                 No results found for this term in the Library of Congress Subject Headings.

@@ -41,6 +41,29 @@ Now calling the API to verify these terms…
 [Any additional notes about the headings, potential alternatives, or special cases to consider]
 `;
 
+// MARC record generation prompt
+const MARC_RECORD_PROMPT = `
+You are a library cataloging expert specializing in MARC records for Library of Congress Subject Headings (LCSH).
+
+I will provide you with a list of validated LCSH terms along with their identifiers and similarity scores. 
+These terms are the best matches found in the Library of Congress database.
+For each term with a similarity score above 30%, please generate a MARC record specifically for field 650 (Topical Terms).
+
+Please follow these guidelines:
+1. Only generate MARC records for terms with similarity scores above 30%
+2. Focus ONLY on field 650 (Topical Terms) - do not include other fields
+3. Include all necessary indicators and subfields for field 650
+4. Be precise and follow cataloging standards
+5. Format each record clearly
+
+For each term, provide ONLY the MARC field 650 record in the following format:
+\`\`\`marc
+650 [indicators] $a [Main heading] $x [Subdivision] $z [Geographic subdivision] $y [Chronological subdivision]
+\`\`\`
+
+Only include the subfields that are necessary for each term. Do not include any explanations, justifications, or additional text outside the MARC record format.
+`;
+
 /**
  * Constructs the complete system prompt by combining user-editable rules with fixed output format
  * @param {string} userRules - The user-editable rules portion of the system prompt
@@ -131,6 +154,119 @@ ${bibliographicInfo.notes ? `Additional Notes: ${bibliographicInfo.notes}` : ''}
 };
 
 /**
+ * Generates MARC records for high-scoring best LOC matches
+ * @param {string} apiKey - The Gemini API key
+ * @param {Array} recommendations - The recommendations with similarity scores and best matches
+ * @returns {Promise<object>} - The API response with MARC records
+ */
+export const generateMarcRecords = async (apiKey, recommendations) => {
+  // Filter recommendations with similarity score > 30 and that have a best match
+  const highScoringTerms = recommendations.filter(rec => 
+    rec.similarity > 30 && rec.bestMatch
+  );
+  
+  if (highScoringTerms.length === 0) {
+    return { marcRecords: {} };
+  }
+  
+  // Prepare the prompt with the high-scoring best matches
+  const termsPrompt = highScoringTerms.map(rec => 
+    `Term: ${rec.bestMatch.heading}
+ID: ${rec.bestMatch.identifier || rec.apiId || 'N/A'}
+Similarity Score: ${rec.similarity}%
+`).join('\n');
+  
+  // Construct the request body
+  const requestBody = {
+    contents: [
+      {
+        role: "user",
+        parts: [{ 
+          text: `${MARC_RECORD_PROMPT}\n\nHere are the validated LCSH terms:\n\n${termsPrompt}` 
+        }]
+      }
+    ],
+    generationConfig: {
+      temperature: 0.1,
+      topK: 40,
+      topP: 0.95,
+      maxOutputTokens: 2048,
+    }
+  };
+
+  try {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestBody),
+      }
+    );
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error?.message || 'Failed to generate MARC records');
+    }
+
+    const data = await response.json();
+    
+    // Parse the response to extract MARC records
+    const marcRecords = parseMarcRecords(data, highScoringTerms);
+    
+    return { marcRecords };
+  } catch (error) {
+    console.error('Error generating MARC records:', error);
+    throw error;
+  }
+};
+
+/**
+ * Parse the Gemini API response to extract MARC records
+ * @param {object} response - The Gemini API response
+ * @param {Array} terms - The high-scoring terms with best matches
+ * @returns {object} - Object mapping term to MARC record
+ */
+const parseMarcRecords = (response, terms) => {
+  try {
+    const content = response.candidates[0].content.parts[0].text;
+    const marcRecords = {};
+    
+    // Extract MARC records for each term
+    terms.forEach(term => {
+      // Use a simple regex to find code blocks with "marc" language
+      const marcBlockRegex = /```marc\s+([\s\S]*?)```/g;
+      let match;
+      let found = false;
+      
+      while ((match = marcBlockRegex.exec(content)) !== null && !found) {
+        const marcRecord = match[1].trim();
+        
+        // Check if this MARC record is for the current term
+        // This is a simple heuristic - we're assuming the records appear in the same order as the terms
+        if (!Object.values(marcRecords).includes(marcRecord)) {
+          // Store the MARC record with the original term as the key
+          marcRecords[term.term] = marcRecord;
+          found = true;
+        }
+      }
+      
+      // If no MARC record was found for this term, use the original one
+      if (!found && term.marc) {
+        marcRecords[term.term] = term.marc;
+      }
+    });
+    
+    return marcRecords;
+  } catch (error) {
+    console.error('Error parsing MARC records:', error);
+    return {};
+  }
+};
+
+/**
  * Parses the Gemini API response to extract LCSH suggestions
  * @param {object} response - The Gemini API response
  * @returns {object} - The parsed suggestions
@@ -211,5 +347,6 @@ export const parseLcshSuggestions = (response) => {
 
 export default {
   generateLcshSuggestions,
-  parseLcshSuggestions
+  parseLcshSuggestions,
+  generateMarcRecords
 }; 

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
     Box,
     Typography,
@@ -18,12 +18,16 @@ import {
     Snackbar,
     Grid,
     TextField,
-    Tooltip
+    Tooltip,
+    Link as MuiLink
 } from '@mui/material';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorIcon from '@mui/icons-material/Error';
 import { useAppContext } from '../context/AppContext';
+import SimilarityScore from './SimilarityScore';
+import { generateMarcRecords } from '../services/geminiService';
+import ReactMarkdown from 'react-markdown';
 
 const FinalRecommendations = () => {
     const {
@@ -33,12 +37,54 @@ const FinalRecommendations = () => {
         setActiveStep,
         saveConversation,
         error,
-        setError
+        setError,
+        apiKey,
+        isLoading,
+        setIsLoading
     } = useAppContext();
 
     const [snackbarOpen, setSnackbarOpen] = useState(false);
     const [snackbarMessage, setSnackbarMessage] = useState('');
     const [selectedRecommendations, setSelectedRecommendations] = useState([]);
+    const [averageSimilarity, setAverageSimilarity] = useState(0);
+    const [sortedRecommendations, setSortedRecommendations] = useState([]);
+    const [marcRecords, setMarcRecords] = useState({});
+    const [processingMarc, setProcessingMarc] = useState(false);
+
+    // Sort recommendations and calculate average similarity when component mounts
+    useEffect(() => {
+        if (finalRecommendations && finalRecommendations.length > 0) {
+            // Sort recommendations by similarity score in descending order
+            const sorted = [...finalRecommendations].sort((a, b) =>
+                (b.similarity || 0) - (a.similarity || 0)
+            );
+            setSortedRecommendations(sorted);
+
+            // Calculate average similarity
+            const validRecommendations = finalRecommendations.filter(rec => rec.similarity !== undefined);
+            if (validRecommendations.length > 0) {
+                const totalSimilarity = validRecommendations.reduce((sum, rec) => sum + (rec.similarity || 0), 0);
+                setAverageSimilarity(Math.round(totalSimilarity / validRecommendations.length));
+            }
+
+            // Generate MARC records for high-scoring terms
+            generateMarcRecordsForHighScoring(sorted);
+        }
+    }, [finalRecommendations]);
+
+    // Generate MARC records for high-scoring terms
+    const generateMarcRecordsForHighScoring = async (recommendations) => {
+        try {
+            setProcessingMarc(true);
+            const result = await generateMarcRecords(apiKey, recommendations);
+            setMarcRecords(result.marcRecords);
+        } catch (err) {
+            console.error('Error generating MARC records:', err);
+            // Don't set error state here to avoid disrupting the UI
+        } finally {
+            setProcessingMarc(false);
+        }
+    };
 
     // Handle back button
     const handleBack = () => {
@@ -52,8 +98,10 @@ const FinalRecommendations = () => {
             saveConversation({
                 bibliographicInfo,
                 initialSuggestions,
-                finalRecommendations,
-                selectedRecommendations: selectedRecommendations.length > 0 ? selectedRecommendations : finalRecommendations
+                finalRecommendations: sortedRecommendations,
+                selectedRecommendations: selectedRecommendations.length > 0 ? selectedRecommendations : sortedRecommendations,
+                averageSimilarity,
+                marcRecords
             });
 
             // Show success message
@@ -81,29 +129,33 @@ const FinalRecommendations = () => {
 
     // Handle copy all to clipboard
     const handleCopyAllToClipboard = () => {
-        const recommendations = selectedRecommendations.length > 0 ? selectedRecommendations : finalRecommendations;
+        const recommendations = selectedRecommendations.length > 0 ? selectedRecommendations : sortedRecommendations;
 
-        const text = recommendations.map(rec => {
-            return `${rec.term}\n${rec.marc}\n${rec.justification}\n`;
-        }).join('\n');
+        const text = recommendations
+            .filter(rec => rec.similarity > 30 && rec.bestMatch)
+            .map(rec => {
+                const marc = marcRecords[rec.term] || rec.marc;
+                return `${rec.bestMatch.heading}\n${marc}\n${rec.justification}\n`;
+            }).join('\n');
 
         handleCopyToClipboard(text);
     };
 
     // Handle export as CSV
     const handleExportCsv = () => {
-        const recommendations = selectedRecommendations.length > 0 ? selectedRecommendations : finalRecommendations;
+        const recommendations = selectedRecommendations.length > 0 ? selectedRecommendations : sortedRecommendations;
 
         const csvContent = [
-            ['Term', 'MARC', 'API ID', 'URL', 'Justification', 'Verified'],
-            ...recommendations.map(rec => [
-                rec.term,
-                rec.marc,
-                rec.apiId,
-                rec.url,
-                rec.justification,
-                rec.verified ? 'Yes' : 'No'
-            ])
+            ['LCSH Term', 'MARC Record (Field 650)', 'LCSH ID', 'Justification', 'Similarity Score'],
+            ...recommendations
+                .filter(rec => rec.similarity > 30 && rec.bestMatch)
+                .map(rec => [
+                    rec.bestMatch.heading,
+                    marcRecords[rec.term] || rec.marc,
+                    rec.bestMatch.identifier || 'N/A',
+                    rec.justification,
+                    rec.similarity || 0
+                ])
         ].map(row => row.map(cell => `"${cell}"`).join(',')).join('\n');
 
         const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
@@ -160,6 +212,11 @@ const FinalRecommendations = () => {
         );
     }
 
+    // Filter recommendations with similarity score > 30 and that have a best match
+    const highScoringRecommendations = sortedRecommendations.filter(rec =>
+        (rec.similarity || 0) > 30 && rec.bestMatch
+    );
+
     return (
         <Box>
             <Typography variant="h6" gutterBottom>
@@ -172,10 +229,30 @@ const FinalRecommendations = () => {
                 </Alert>
             )}
 
+            {/* Overall similarity score */}
+            <Card variant="outlined" sx={{ mb: 3 }}>
+                <CardContent>
+                    <Typography variant="subtitle1" gutterBottom>
+                        Overall Validation Score
+                    </Typography>
+                    <Box sx={{ maxWidth: 400, mx: 'auto', my: 2 }}>
+                        <SimilarityScore
+                            score={averageSimilarity}
+                            label="Average similarity between recommended terms and LOC results"
+                            showTooltip={false}
+                        />
+                    </Box>
+                    <Typography variant="body2" color="text.secondary" align="center">
+                        This score indicates how well the recommended terms match the actual Library of Congress Subject Headings.
+                    </Typography>
+                </CardContent>
+            </Card>
+
             <Box sx={{ mb: 3 }}>
                 <Typography variant="body2" color="text.secondary" paragraph>
-                    Below are the final LCSH recommendations based on the bibliographic information and LOC validation.
-                    You can select recommendations to include in the export or copy to clipboard.
+                    Below are the final LCSH recommendations based on the best matches found in the Library of Congress database.
+                    Only terms with similarity scores above 30% are shown. Results are sorted by similarity score in descending order.
+                    MARC records are specifically for field 650 (Topical Terms).
                 </Typography>
 
                 <Box sx={{ display: 'flex', gap: 2, mb: 2 }}>
@@ -195,131 +272,130 @@ const FinalRecommendations = () => {
                 </Box>
             </Box>
 
-            <List>
-                {finalRecommendations.map((recommendation, index) => {
-                    const isSelected = selectedRecommendations.some(rec => rec.term === recommendation.term);
+            {processingMarc && (
+                <Box sx={{ display: 'flex', alignItems: 'center', mb: 3 }}>
+                    <CircularProgress size={24} sx={{ mr: 1 }} />
+                    <Typography>Generating MARC records for high-scoring terms...</Typography>
+                </Box>
+            )}
 
-                    return (
-                        <Paper
-                            key={index}
-                            variant="outlined"
-                            sx={{
-                                mb: 2,
-                                p: 2,
-                                border: isSelected ? '2px solid #1976d2' : '1px solid rgba(0, 0, 0, 0.12)'
-                            }}
-                        >
-                            <Grid container spacing={2}>
-                                <Grid item xs={12} sx={{ display: 'flex', alignItems: 'center' }}>
-                                    <Typography variant="h6" sx={{ flexGrow: 1 }}>
-                                        {recommendation.term}
-                                    </Typography>
+            {highScoringRecommendations.length === 0 ? (
+                <Alert severity="warning" sx={{ mb: 3 }}>
+                    No recommendations with similarity scores above 30% and valid LOC matches were found. Consider refining your search or using different bibliographic information.
+                </Alert>
+            ) : (
+                <List>
+                    {highScoringRecommendations.map((recommendation, index) => {
+                        const isSelected = selectedRecommendations.some(rec => rec.term === recommendation.term);
+                        const marcRecord = marcRecords[recommendation.term] || recommendation.marc;
+                        const bestMatch = recommendation.bestMatch;
 
-                                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                                        {recommendation.verified ? (
-                                            <Tooltip title="Verified in LOC">
-                                                <CheckCircleIcon color="success" />
+                        return (
+                            <Paper
+                                key={index}
+                                variant="outlined"
+                                sx={{
+                                    mb: 2,
+                                    p: 2,
+                                    border: isSelected ? '2px solid #1976d2' : '1px solid rgba(0, 0, 0, 0.12)'
+                                }}
+                            >
+                                <Grid container spacing={2}>
+                                    <Grid item xs={12} sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                            <Typography variant="h6">
+                                                {bestMatch.heading}
+                                            </Typography>
+                                            {bestMatch.uri && (
+                                                <MuiLink
+                                                    href={`http://id.loc.gov${bestMatch.uri}`}
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
+                                                    sx={{ ml: 1 }}
+                                                >
+                                                    View on LOC
+                                                </MuiLink>
+                                            )}
+                                        </Box>
+
+                                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                            <Tooltip title={`Similarity score: ${recommendation.similarity}%`}>
+                                                <Chip
+                                                    label={`${recommendation.similarity}% match`}
+                                                    color={recommendation.similarity >= 70 ? "success" : recommendation.similarity >= 50 ? "warning" : "error"}
+                                                    size="small"
+                                                />
                                             </Tooltip>
-                                        ) : (
-                                            <Tooltip title="Not found in LOC">
-                                                <ErrorIcon color="error" />
-                                            </Tooltip>
-                                        )}
 
-                                        <Tooltip title="Copy to clipboard">
-                                            <IconButton
-                                                size="small"
-                                                onClick={() => handleCopyToClipboard(recommendation.term)}
-                                            >
-                                                <ContentCopyIcon fontSize="small" />
-                                            </IconButton>
-                                        </Tooltip>
-
-                                        <Button
-                                            variant={isSelected ? "contained" : "outlined"}
-                                            size="small"
-                                            onClick={() => toggleRecommendationSelection(recommendation)}
-                                        >
-                                            {isSelected ? 'Selected' : 'Select'}
-                                        </Button>
-                                    </Box>
-                                </Grid>
-
-                                <Grid item xs={12}>
-                                    <Typography variant="subtitle2">MARC Format:</Typography>
-                                    <TextField
-                                        fullWidth
-                                        variant="outlined"
-                                        size="small"
-                                        value={recommendation.marc}
-                                        InputProps={{
-                                            readOnly: true,
-                                            endAdornment: (
+                                            <Tooltip title="Copy to clipboard">
                                                 <IconButton
                                                     size="small"
-                                                    onClick={() => handleCopyToClipboard(recommendation.marc)}
+                                                    onClick={() => handleCopyToClipboard(bestMatch.heading)}
                                                 >
                                                     <ContentCopyIcon fontSize="small" />
                                                 </IconButton>
-                                            )
-                                        }}
-                                        sx={{ fontFamily: 'monospace', mb: 2 }}
-                                    />
-                                </Grid>
+                                            </Tooltip>
 
-                                <Grid item xs={12} sm={6}>
-                                    <Typography variant="subtitle2">API ID:</Typography>
-                                    <Typography variant="body2">{recommendation.apiId}</Typography>
-                                </Grid>
-
-                                <Grid item xs={12} sm={6}>
-                                    <Typography variant="subtitle2">URL:</Typography>
-                                    <Typography variant="body2">
-                                        <a
-                                            href={recommendation.url}
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                        >
-                                            {recommendation.url}
-                                        </a>
-                                    </Typography>
-                                </Grid>
-
-                                <Grid item xs={12}>
-                                    <Typography variant="subtitle2">Justification:</Typography>
-                                    <Typography variant="body2">{recommendation.justification}</Typography>
-                                </Grid>
-
-                                {recommendation.scrapedItems && recommendation.scrapedItems.length > 0 && (
-                                    <Grid item xs={12}>
-                                        <Typography variant="subtitle2">
-                                            LOC Validation Results ({recommendation.scrapedItems.length}):
-                                        </Typography>
-                                        <List dense>
-                                            {recommendation.scrapedItems.slice(0, 3).map((item, itemIndex) => (
-                                                <ListItem key={itemIndex} dense>
-                                                    <ListItemText
-                                                        primary={item.heading}
-                                                        secondary={item.details}
-                                                    />
-                                                </ListItem>
-                                            ))}
-                                            {recommendation.scrapedItems.length > 3 && (
-                                                <ListItem dense>
-                                                    <ListItemText
-                                                        primary={`${recommendation.scrapedItems.length - 3} more results...`}
-                                                        secondary="Select to view all"
-                                                    />
-                                                </ListItem>
-                                            )}
-                                        </List>
+                                            <Button
+                                                variant={isSelected ? "contained" : "outlined"}
+                                                size="small"
+                                                onClick={() => toggleRecommendationSelection(recommendation)}
+                                            >
+                                                {isSelected ? 'Selected' : 'Select'}
+                                            </Button>
+                                        </Box>
                                     </Grid>
-                                )}
-                            </Grid>
-                        </Paper>
-                    );
-                })}
-            </List>
+
+                                    {recommendation.similarity !== undefined && (
+                                        <Grid item xs={12}>
+                                            <Box sx={{ maxWidth: 300 }}>
+                                                <SimilarityScore score={recommendation.similarity} label="Similarity to suggested term" />
+                                            </Box>
+                                        </Grid>
+                                    )}
+
+                                    <Grid item xs={12}>
+                                        <Typography variant="subtitle2">LCSH ID:</Typography>
+                                        <Typography variant="body2">{bestMatch.identifier || 'N/A'}</Typography>
+                                    </Grid>
+
+                                    <Grid item xs={12}>
+                                        <Typography variant="subtitle2">MARC Record (Field 650):</Typography>
+                                        <TextField
+                                            fullWidth
+                                            variant="outlined"
+                                            size="small"
+                                            value={marcRecord}
+                                            InputProps={{
+                                                readOnly: true,
+                                                endAdornment: (
+                                                    <IconButton
+                                                        size="small"
+                                                        onClick={() => handleCopyToClipboard(marcRecord)}
+                                                    >
+                                                        <ContentCopyIcon fontSize="small" />
+                                                    </IconButton>
+                                                )
+                                            }}
+                                            sx={{ fontFamily: 'monospace', mb: 2 }}
+                                        />
+                                    </Grid>
+
+                                    <Grid item xs={12}>
+                                        <Typography variant="subtitle2">Justification:</Typography>
+                                        <Typography variant="body2">{recommendation.justification}</Typography>
+                                    </Grid>
+
+                                    <Grid item xs={12}>
+                                        <Typography variant="subtitle2">Original Suggested Term:</Typography>
+                                        <Typography variant="body2">{recommendation.term}</Typography>
+                                    </Grid>
+                                </Grid>
+                            </Paper>
+                        );
+                    })}
+                </List>
+            )}
 
             {initialSuggestions && initialSuggestions.specialConsiderations && (
                 <Box sx={{ mt: 3, mb: 3 }}>
@@ -327,9 +403,9 @@ const FinalRecommendations = () => {
                         Special Considerations
                     </Typography>
                     <Paper variant="outlined" sx={{ p: 2 }}>
-                        <Typography variant="body2">
+                        <ReactMarkdown>
                             {initialSuggestions.specialConsiderations}
-                        </Typography>
+                        </ReactMarkdown>
                     </Paper>
                 </Box>
             )}
