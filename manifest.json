@@ -1,7 +1,7 @@
 {
     "manifest_version": 3,
     "name": "LCSH Recommendation Tool",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "Suggests Library of Congress Subject Headings based on bibliographic information using Gemini API",
     "permissions": [
         "storage"

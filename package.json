@@ -1,6 +1,6 @@
 {
     "name": "lcsh-recommendation-tool",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "Chrome extension that suggests Library of Congress Subject Headings based on bibliographic information",
     "main": "index.js",
     "scripts": {
