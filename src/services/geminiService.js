@@ -128,9 +128,9 @@ ${bibliographicInfo.notes ? `Additional Notes: ${bibliographicInfo.notes}` : ''}
   });
 
   try {
-    // Use Gemini 2.0 Flash model instead of Gemini 1.5 Pro Vision
+    // Use Gemini 2.5 Flash model
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
       {
         method: 'POST',
         headers: {
@@ -196,7 +196,7 @@ Similarity Score: ${rec.similarity}%
 
   try {
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
       {
         method: 'POST',
         headers: {

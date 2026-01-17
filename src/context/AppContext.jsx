@@ -21,7 +21,7 @@ const DEFAULT_SYSTEM_PROMPT_RULES = `# LCSH Selection Rules
 10. For historical works, assign chronological subdivisions as appropriate.
 11. If images are provided, analyze them for additional bibliographic information.
 12. For book covers or title pages, extract relevant subject information.
-13. Use Gemini 2.0 Flash capabilities to process both text and image content.`;
+13. Use Gemini 2.5 Flash capabilities to process both text and image content.`;
 
 export const AppProvider = ({ children }) => {
     // State for bibliographic information
