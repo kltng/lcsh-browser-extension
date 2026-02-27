@@ -6,7 +6,6 @@ module.exports = {
   entry: {
     popup: './src/popup.jsx',
     background: './src/background.js',
-    contentScript: './src/contentScript.js',
     app: './src/app.jsx',
   },
   module: {

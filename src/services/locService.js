@@ -1,107 +1,174 @@
 /**
- * Constructs a search URL for the Library of Congress Subject Headings
- * @param {string} term - The search term
- * @returns {string} - The search URL
+ * LOC Service — uses the Library of Congress suggest2 API
+ * Replaces the previous web-scraping approach with direct API calls.
+ * This is faster, more reliable, and doesn't require the tabs permission.
  */
+
+const LCSH_SUGGEST_URL = 'https://id.loc.gov/authorities/subjects/suggest2';
+const LCNAF_SUGGEST_URL = 'https://id.loc.gov/authorities/names/suggest2';
+
+/**
+ * Normalize a query for LOC search — strip subdivisions, clean up whitespace
+ * @param {string} query - The raw search term
+ * @returns {string} - Normalized query
+ */
+export const normalizeQuery = (query) => {
+  return query
+    .replace(/--/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+};
+
+/**
+ * Extract the main heading before the first subdivision
+ * @param {string} heading - Full heading with possible subdivisions
+ * @returns {string}
+ */
+export const extractMainHeading = (heading) => {
+  const parts = heading.split('--');
+  return parts[0].trim();
+};
+
+/**
+ * Search the LOC suggest2 API for a given authority file
+ * @param {string} url - The suggest2 endpoint URL
+ * @param {string} query - The search term
+ * @param {number} count - Max results to return
+ * @returns {Promise<Array<{heading: string, uri: string, identifier: string, datasetType: string}>>}
+ */
+const searchSuggest2 = async (url, query, count = 20) => {
+  const params = new URLSearchParams({ q: query, count: String(count) });
+  const fullUrl = `${url}?${params}`;
+
+  const response = await fetch(fullUrl);
+  if (!response.ok) {
+    throw new Error(`LOC API error: ${response.status} ${response.statusText}`);
+  }
+
+  const data = await response.json();
+
+  // suggest2 response: { hits: [ { uri, aLabel, vLabel, ... } ] }
+  if (!data.hits || !Array.isArray(data.hits)) {
+    return [];
+  }
+
+  return data.hits.map(hit => ({
+    heading: hit.aLabel || hit.suggestLabel || '',
+    uri: hit.uri || '',
+    identifier: hit.uri ? hit.uri.split('/').pop() : '',
+    datasetType: hit.memberOf || 'LCSH',
+  }));
+};
+
+/**
+ * Search LCSH for a term
+ * @param {string} term - The search term
+ * @param {number} count - Max results
+ * @returns {Promise<Array>}
+ */
+export const searchLcsh = async (term, count = 20) => {
+  const normalized = normalizeQuery(term);
+  let results = await searchSuggest2(LCSH_SUGGEST_URL, normalized, count);
+
+  // Fallback: if query has subdivisions and returned 0 results, try main heading
+  if (results.length === 0 && term.includes('--')) {
+    const mainHeading = extractMainHeading(term);
+    results = await searchSuggest2(LCSH_SUGGEST_URL, mainHeading, count);
+  }
+
+  return results;
+};
+
+/**
+ * Search LCNAF for a term
+ * @param {string} term - The search term
+ * @param {number} count - Max results
+ * @returns {Promise<Array>}
+ */
+export const searchLcnaf = async (term, count = 20) => {
+  const normalized = normalizeQuery(term);
+  return searchSuggest2(LCNAF_SUGGEST_URL, normalized, count);
+};
+
+/**
+ * Search both LCSH and LCNAF in parallel for a single term
+ * @param {string} term - The search term
+ * @returns {Promise<{lcshResults: Array, lcnafResults: Array}>}
+ */
+export const searchLOCForTerm = async (term) => {
+  const [lcshResults, lcnafResults] = await Promise.all([
+    searchLcsh(term).catch(() => []),
+    searchLcnaf(term).catch(() => []),
+  ]);
+
+  return {
+    lcshResults: lcshResults.map(r => ({ ...r, source: 'lcsh' })),
+    lcnafResults: lcnafResults.map(r => ({ ...r, source: 'lcnaf' })),
+  };
+};
+
+/**
+ * Validate multiple terms against LOC, with progress callback
+ * @param {string[]} terms - The search terms
+ * @param {function} onProgress - Called with (completed, total) after each term
+ * @returns {Promise<object>} - Map of term → { success, items, source }
+ */
+export const validateMultipleTerms = async (terms, onProgress) => {
+  const results = {};
+  let completed = 0;
+
+  // Process all terms with concurrency limit of 3
+  const queue = [...terms];
+  const concurrency = 3;
+
+  const processNext = async () => {
+    while (queue.length > 0) {
+      const term = queue.shift();
+      try {
+        const { lcshResults, lcnafResults } = await searchLOCForTerm(term);
+        const allResults = [...lcshResults, ...lcnafResults];
+
+        results[term] = {
+          success: allResults.length > 0,
+          items: allResults,
+          error: allResults.length === 0 ? 'No results found' : null,
+        };
+      } catch (error) {
+        results[term] = {
+          success: false,
+          items: [],
+          error: error.message || 'Failed to search LOC',
+        };
+      }
+
+      completed++;
+      if (onProgress) {
+        onProgress(completed, terms.length);
+      }
+    }
+  };
+
+  const workers = [];
+  for (let i = 0; i < Math.min(concurrency, terms.length); i++) {
+    workers.push(processNext());
+  }
+  await Promise.all(workers);
+
+  return results;
+};
+
+// Legacy exports for backward compatibility
 export const constructLocSearchUrl = (term) => {
   const encodedTerm = encodeURIComponent(term);
   return `https://id.loc.gov/search/?q=${encodedTerm}&q=cs%3Ahttp%3A%2F%2Fid.loc.gov%2Fauthorities%2Fsubjects`;
 };
 
-/**
- * Sends a message to the content script to scrape the LOC search results
- * @param {string} term - The search term
- * @returns {Promise<object>} - The scraped results
- */
-export const scrapeLocResults = async (term) => {
-  try {
-    console.log(`Scraping LOC results for term: "${term}"`);
-    
-    // Create a tab to load the LOC search page
-    const tab = await new Promise((resolve) => {
-      chrome.tabs.create(
-        { url: constructLocSearchUrl(term), active: false },
-        (newTab) => {
-          resolve(newTab);
-        }
-      );
-    });
-
-    // Wait for the page to load and then inject the content script
-    await new Promise((resolve) => {
-      const listener = (tabId, changeInfo) => {
-        if (tabId === tab.id && changeInfo.status === 'complete') {
-          chrome.tabs.onUpdated.removeListener(listener);
-          // Give the page a moment to fully render
-          setTimeout(resolve, 1000);
-        }
-      };
-      chrome.tabs.onUpdated.addListener(listener);
-    });
-
-    // Execute the content script to scrape the results
-    const results = await new Promise((resolve) => {
-      chrome.tabs.sendMessage(tab.id, { action: 'scrapeResults' }, (response) => {
-        console.log(`Received scraping results for "${term}":`, response);
-        resolve(response || { success: false, error: 'No response from content script', items: [] });
-      });
-    });
-
-    // Close the tab
-    chrome.tabs.remove(tab.id);
-
-    return {
-      term,
-      results
-    };
-  } catch (error) {
-    console.error(`Error scraping LOC results for term "${term}":`, error);
-    return {
-      term,
-      results: {
-        success: false,
-        error: error.message || 'Failed to scrape LOC results',
-        items: []
-      }
-    };
-  }
-};
-
-/**
- * Scrapes multiple LOC search terms in parallel
- * @param {string[]} terms - The search terms
- * @param {number} concurrency - The number of concurrent requests
- * @returns {Promise<object>} - The scraped results for all terms
- */
-export const scrapeMultipleTerms = async (terms, concurrency = 2) => {
-  console.log(`Scraping multiple terms: ${terms.join(', ')}`);
-  const results = {};
-  const queue = [...terms];
-  
-  const processQueue = async () => {
-    while (queue.length > 0) {
-      const term = queue.shift();
-      console.log(`Processing term: "${term}"`);
-      const result = await scrapeLocResults(term);
-      results[term] = result.results;
-    }
-  };
-  
-  // Create multiple workers to process the queue in parallel
-  const workers = [];
-  for (let i = 0; i < Math.min(concurrency, terms.length); i++) {
-    workers.push(processQueue());
-  }
-  
-  // Wait for all workers to complete
-  await Promise.all(workers);
-  
-  console.log('Finished scraping all terms:', results);
-  return results;
-};
-
 export default {
+  normalizeQuery,
+  extractMainHeading,
+  searchLcsh,
+  searchLcnaf,
+  searchLOCForTerm,
+  validateMultipleTerms,
   constructLocSearchUrl,
-  scrapeLocResults,
-  scrapeMultipleTerms
-}; 
+};

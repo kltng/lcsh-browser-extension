@@ -1,10 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import {
     Box,
     Typography,
     Paper,
     Button,
-    Divider,
     List,
     ListItem,
     ListItemText,
@@ -13,11 +12,11 @@ import {
     Alert,
     Card,
     CardContent,
-    CardActions,
-    Grid
+    Grid,
+    LinearProgress
 } from '@mui/material';
 import { useAppContext } from '../context/AppContext';
-import { scrapeMultipleTerms } from '../services/locService';
+import { validateMultipleTerms } from '../services/locService';
 import ImageIcon from '@mui/icons-material/Image';
 
 const InitialSuggestions = () => {
@@ -32,29 +31,38 @@ const InitialSuggestions = () => {
         setError
     } = useAppContext();
 
+    const [progress, setProgress] = useState({ completed: 0, total: 0 });
+
     // Handle back button
     const handleBack = () => {
         setActiveStep(0);
     };
 
-    // Handle continue button
+    // Handle continue button — now uses API instead of web scraping
     const handleContinue = async () => {
         try {
             setIsLoading(true);
+            setError(null);
 
-            // Scrape LOC website for each candidate term
-            const scrapedResults = await scrapeMultipleTerms(initialSuggestions.candidateTerms);
+            const terms = initialSuggestions.candidateTerms;
+            setProgress({ completed: 0, total: terms.length });
 
-            // Store the scraped results in the context
-            setScrapedResults(scrapedResults);
+            // Validate terms using LOC suggest2 API with progress tracking
+            const results = await validateMultipleTerms(terms, (completed, total) => {
+                setProgress({ completed, total });
+            });
+
+            // Store the results in the context
+            setScrapedResults(results);
 
             // Move to the next step
             setActiveStep(2);
         } catch (err) {
-            setError(err.message || 'Failed to scrape LOC website');
-            console.error('Error scraping LOC website:', err);
+            setError(err.message || 'Failed to validate terms with LOC');
+            console.error('Error validating terms:', err);
         } finally {
             setIsLoading(false);
+            setProgress({ completed: 0, total: 0 });
         }
     };
 
@@ -76,6 +84,10 @@ const InitialSuggestions = () => {
             </Box>
         );
     }
+
+    const progressPercent = progress.total > 0
+        ? Math.round((progress.completed / progress.total) * 100)
+        : 0;
 
     return (
         <Box>
@@ -133,7 +145,7 @@ const InitialSuggestions = () => {
                             <Grid item xs={12}>
                                 <Typography variant="body2" sx={{ display: 'flex', alignItems: 'center' }}>
                                     <ImageIcon fontSize="small" sx={{ mr: 0.5 }} />
-                                    <strong>Images:</strong> {bibliographicInfo.images.length} image(s) uploaded
+                                    <strong>Images:</strong>&nbsp;{bibliographicInfo.images.length} image(s) uploaded
                                 </Typography>
                                 <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mt: 1 }}>
                                     {bibliographicInfo.images.map((image, index) => (
@@ -198,17 +210,27 @@ const InitialSuggestions = () => {
                     disabled={isLoading}
                 >
                     {isLoading ? (
-                        <>
-                            <CircularProgress size={24} sx={{ mr: 1 }} />
-                            Scraping LOC Website...
-                        </>
+                        <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                            <CircularProgress size={20} sx={{ mr: 1 }} />
+                            Validating {progress.completed}/{progress.total} terms...
+                        </Box>
                     ) : (
                         'Validate Terms with LOC'
                     )}
                 </Button>
             </Box>
+
+            {/* Progress bar during validation */}
+            {isLoading && progress.total > 0 && (
+                <Box sx={{ mt: 2 }}>
+                    <LinearProgress variant="determinate" value={progressPercent} />
+                    <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5 }}>
+                        Validating term {progress.completed} of {progress.total} via LOC API...
+                    </Typography>
+                </Box>
+            )}
         </Box>
     );
 };
 
-export default InitialSuggestions; 
+export default InitialSuggestions;

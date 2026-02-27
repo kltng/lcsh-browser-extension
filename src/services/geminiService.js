@@ -1,3 +1,63 @@
+const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
+
+/**
+ * Call the Gemini API with exponential backoff retry for transient errors
+ * @param {string} apiKey - The Gemini API key
+ * @param {object} requestBody - The request body
+ * @param {number} maxRetries - Maximum number of retries (default 2)
+ * @returns {Promise<object>} - The API response data
+ */
+const callGeminiWithRetry = async (apiKey, requestBody, maxRetries = 2) => {
+  let lastError;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const response = await fetch(`${GEMINI_API_URL}?key=${apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody),
+      });
+
+      if (response.ok) {
+        return await response.json();
+      }
+
+      const errorData = await response.json().catch(() => ({}));
+      const errorMessage = errorData.error?.message || `HTTP ${response.status}`;
+
+      // Don't retry client errors (400, 401, 403) — only retry 429 and 5xx
+      if (response.status === 429 || response.status >= 500) {
+        lastError = new Error(`Gemini API error (${response.status}): ${errorMessage}`);
+        if (attempt < maxRetries) {
+          const delay = Math.pow(2, attempt) * 1000; // 1s, 2s
+          await new Promise(r => setTimeout(r, delay));
+          continue;
+        }
+      }
+
+      // Non-retryable error
+      if (response.status === 401 || response.status === 403) {
+        throw new Error('Invalid or expired API key. Please check your Gemini API key in the extension popup.');
+      }
+      throw new Error(errorMessage);
+    } catch (error) {
+      if (error.message?.includes('Invalid or expired API key')) throw error;
+      if (error.message?.includes('Gemini API error')) {
+        lastError = error;
+        continue;
+      }
+      // Network error
+      lastError = new Error(`Network error: ${error.message}. Check your internet connection.`);
+      if (attempt < maxRetries) {
+        await new Promise(r => setTimeout(r, 1000));
+        continue;
+      }
+    }
+  }
+
+  throw lastError || new Error('Failed after retries');
+};
+
 // Fixed output format part of the system prompt
 const FIXED_OUTPUT_FORMAT = `
 ### Output Format Instructions
@@ -43,25 +103,27 @@ Now calling the API to verify these terms…
 
 // MARC record generation prompt
 const MARC_RECORD_PROMPT = `
-You are a library cataloging expert specializing in MARC records for Library of Congress Subject Headings (LCSH).
+You are a library cataloging expert specializing in MARC records for Library of Congress Subject Headings (LCSH) and Name Authority File (LCNAF).
 
-I will provide you with a list of validated LCSH terms along with their identifiers and similarity scores. 
-These terms are the best matches found in the Library of Congress database.
-For each term with a similarity score above 30%, please generate a MARC record specifically for field 650 (Topical Terms).
+I will provide you with a list of validated terms along with their identifiers, similarity scores, and source authority.
+For each term, generate the appropriate MARC field record based on the source:
+- LCSH terms: use field 650 (Subject Added Entry - Topical Term)
+- LCNAF personal names: use field 600 (Subject Added Entry - Personal Name)
+- LCNAF corporate names: use field 610 (Subject Added Entry - Corporate Name)
 
 Please follow these guidelines:
 1. Only generate MARC records for terms with similarity scores above 30%
-2. Focus ONLY on field 650 (Topical Terms) - do not include other fields
-3. Include all necessary indicators and subfields for field 650
+2. Use the correct MARC field based on the source (650 for LCSH, 600/610 for LCNAF)
+3. Include all necessary indicators and subfields
 4. Be precise and follow cataloging standards
 5. Format each record clearly
 
-For each term, provide ONLY the MARC field 650 record in the following format:
+For each term, provide ONLY the MARC record in the following format:
 \`\`\`marc
-650 [indicators] $a [Main heading] $x [Subdivision] $z [Geographic subdivision] $y [Chronological subdivision]
+[field] [indicators] $a [Main heading] $x [Subdivision] $z [Geographic subdivision] $y [Chronological subdivision]
 \`\`\`
 
-Only include the subfields that are necessary for each term. Do not include any explanations, justifications, or additional text outside the MARC record format.
+Only include the subfields that are necessary for each term. Do not include any explanations or additional text outside the MARC record format.
 `;
 
 /**
@@ -128,24 +190,7 @@ ${bibliographicInfo.notes ? `Additional Notes: ${bibliographicInfo.notes}` : ''}
   });
 
   try {
-    // Use Gemini 2.5 Flash model
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(requestBody),
-      }
-    );
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.error?.message || 'Failed to generate LCSH suggestions');
-    }
-
-    const data = await response.json();
+    const data = await callGeminiWithRetry(apiKey, requestBody);
     return data;
   } catch (error) {
     console.error('Error generating LCSH suggestions:', error);
@@ -170,9 +215,10 @@ export const generateMarcRecords = async (apiKey, recommendations) => {
   }
   
   // Prepare the prompt with the high-scoring best matches
-  const termsPrompt = highScoringTerms.map(rec => 
+  const termsPrompt = highScoringTerms.map(rec =>
     `Term: ${rec.bestMatch.heading}
 ID: ${rec.bestMatch.identifier || rec.apiId || 'N/A'}
+Source: ${(rec.bestMatch.source || 'lcsh').toUpperCase()}
 Similarity Score: ${rec.similarity}%
 `).join('\n');
   
@@ -195,23 +241,7 @@ Similarity Score: ${rec.similarity}%
   };
 
   try {
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(requestBody),
-      }
-    );
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.error?.message || 'Failed to generate MARC records');
-    }
-
-    const data = await response.json();
+    const data = await callGeminiWithRetry(apiKey, requestBody);
     
     // Parse the response to extract MARC records
     const marcRecords = parseMarcRecords(data, highScoringTerms);
