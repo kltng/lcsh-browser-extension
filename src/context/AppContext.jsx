@@ -13,7 +13,7 @@ const DEFAULT_SYSTEM_PROMPT_RULES = `# LCSH Selection Rules
 2. Prefer established LCSH terms over creating new ones.
 3. Use the most specific heading available for a topic.
 4. Assign 1-6 subject headings, with 3-4 being optimal for most works.
-5. For personal names, verify the authorized form in the LC Name Authority File.
+5. For personal names, verify the authorized form in the LC Name Authority File (LCNAF).
 6. For geographic subjects, use established subdivisions.
 7. For works about multiple topics, assign a heading for each significant topic.
 8. For works of literature, assign genre/form terms as appropriate.
@@ -21,7 +21,7 @@ const DEFAULT_SYSTEM_PROMPT_RULES = `# LCSH Selection Rules
 10. For historical works, assign chronological subdivisions as appropriate.
 11. If images are provided, analyze them for additional bibliographic information.
 12. For book covers or title pages, extract relevant subject information.
-13. Use Gemini 2.5 Flash capabilities to process both text and image content.`;
+13. Terms will be validated against both LCSH and LCNAF authorities.`;
 
 export const AppProvider = ({ children }) => {
     // State for bibliographic information

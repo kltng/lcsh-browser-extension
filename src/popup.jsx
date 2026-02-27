@@ -40,9 +40,9 @@ const Popup = () => {
             return;
         }
 
-        // Simple validation - Gemini API keys typically start with "AI"
-        if (!apiKey.startsWith('AI')) {
-            showSnackbar('Invalid API key format', 'warning');
+        // Gemini API keys typically start with "AI" and are ~39 chars
+        if (!apiKey.startsWith('AI') || apiKey.trim().length < 30) {
+            showSnackbar('Invalid API key format. Gemini API keys start with "AI" and are about 39 characters.', 'warning');
             return;
         }
 
@@ -128,6 +128,17 @@ const Popup = () => {
                         Please enter and save a valid Gemini API key to continue
                     </Typography>
                 )}
+
+                <Typography variant="caption" color="text.secondary" sx={{ mt: 2, display: 'block', textAlign: 'center' }}>
+                    v1.1.0 &middot;{' '}
+                    <a
+                        href="#"
+                        onClick={(e) => { e.preventDefault(); chrome.tabs.create({ url: 'https://www.cataloguer.name/privacy' }); }}
+                        style={{ color: 'inherit' }}
+                    >
+                        Privacy Policy
+                    </a>
+                </Typography>
             </Paper>
 
             <Snackbar

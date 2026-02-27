@@ -302,13 +302,21 @@ const FinalRecommendations = () => {
                             >
                                 <Grid container spacing={2}>
                                     <Grid item xs={12} sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
                                             <Typography variant="h6">
                                                 {bestMatch.heading}
                                             </Typography>
+                                            {bestMatch.source && (
+                                                <Chip
+                                                    label={bestMatch.source === 'lcnaf' ? 'LCNAF' : 'LCSH'}
+                                                    size="small"
+                                                    variant="outlined"
+                                                    color={bestMatch.source === 'lcnaf' ? 'secondary' : 'primary'}
+                                                />
+                                            )}
                                             {bestMatch.uri && (
                                                 <MuiLink
-                                                    href={`http://id.loc.gov${bestMatch.uri}`}
+                                                    href={bestMatch.uri.startsWith('http') ? bestMatch.uri : `http://id.loc.gov${bestMatch.uri}`}
                                                     target="_blank"
                                                     rel="noopener noreferrer"
                                                     sx={{ ml: 1 }}

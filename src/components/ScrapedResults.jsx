@@ -2,18 +2,13 @@ import React, { useState, useEffect } from 'react';
 import {
     Box,
     Typography,
-    Paper,
     Button,
-    Divider,
     List,
     ListItem,
-    ListItemText,
     Chip,
-    CircularProgress,
     Alert,
     Card,
     CardContent,
-    CardActions,
     Accordion,
     AccordionSummary,
     AccordionDetails,
@@ -29,12 +24,9 @@ import { findBestMatch, calculateSimilarity } from '../utils/similarityUtils';
 const ScrapedResults = () => {
     const {
         initialSuggestions,
-        bibliographicInfo,
         scrapedResults,
         setActiveStep,
         setFinalRecommendations,
-        setIsLoading,
-        isLoading,
         error,
         setError
     } = useAppContext();
@@ -43,11 +35,8 @@ const ScrapedResults = () => {
     const [similarityScores, setSimilarityScores] = useState({});
     const [averageSimilarity, setAverageSimilarity] = useState(0);
 
-    // Process the scraped results when the component mounts
+    // Process results when component mounts
     useEffect(() => {
-        console.log('ScrapedResults component mounted with results:', scrapedResults);
-
-        // Process the scraped results to make them easier to display
         const processed = {};
         const scores = {};
         let totalScore = 0;
@@ -60,7 +49,6 @@ const ScrapedResults = () => {
                 items: result?.items || []
             };
 
-            // Calculate similarity score for this term
             if (result?.items && result.items.length > 0) {
                 const bestMatch = findBestMatch(term, result.items);
                 scores[term] = bestMatch.similarity;
@@ -71,7 +59,6 @@ const ScrapedResults = () => {
             }
         });
 
-        // Calculate average similarity score
         const avgScore = validTerms > 0 ? Math.round(totalScore / validTerms) : 0;
 
         setProcessedResults(processed);
@@ -79,20 +66,16 @@ const ScrapedResults = () => {
         setAverageSimilarity(avgScore);
     }, [scrapedResults]);
 
-    // Handle back button
     const handleBack = () => {
         setActiveStep(1);
     };
 
-    // Handle continue button
     const handleContinue = () => {
         try {
-            // Combine the initial suggestions with the scraped results and similarity scores
             const finalRecommendations = initialSuggestions.recommendedTerms.map(term => {
                 const scrapedResult = processedResults[term.term] || { items: [] };
                 const similarity = similarityScores[term.term] || 0;
 
-                // Find the best match from scraped results
                 let bestMatch = null;
                 if (scrapedResult.items && scrapedResult.items.length > 0) {
                     const { item } = findBestMatch(term.term, scrapedResult.items);
@@ -108,23 +91,18 @@ const ScrapedResults = () => {
                 };
             });
 
-            // Store the final recommendations in the context
             setFinalRecommendations(finalRecommendations);
-
-            // Move to the next step
             setActiveStep(3);
         } catch (err) {
             setError(err.message || 'Failed to process final recommendations');
-            console.error('Error processing final recommendations:', err);
         }
     };
 
-    // If there are no scraped results, show a message
     if (!scrapedResults || Object.keys(scrapedResults).length === 0) {
         return (
             <Box sx={{ textAlign: 'center', py: 4 }}>
                 <Typography variant="h6" color="text.secondary">
-                    No scraped results available. Please go back and validate terms first.
+                    No validation results available. Please go back and validate terms first.
                 </Typography>
                 <Button
                     variant="contained"
@@ -178,7 +156,7 @@ const ScrapedResults = () => {
                     >
                         <Box sx={{ display: 'flex', alignItems: 'center', width: '100%' }}>
                             <Typography sx={{ flexGrow: 1 }}>{term}</Typography>
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 180 }}>
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 220 }}>
                                 {result && result.items && result.items.length > 0 ? (
                                     <>
                                         <Chip
@@ -221,20 +199,28 @@ const ScrapedResults = () => {
                                 </Typography>
                                 <List>
                                     {result.items.map((item, itemIndex) => {
-                                        // Calculate individual similarity for this item
                                         const itemSimilarity = calculateSimilarity(term, item.heading);
+                                        const sourceBadge = item.source === 'lcnaf' ? 'LCNAF' : 'LCSH';
 
                                         return (
                                             <ListItem key={itemIndex} divider>
                                                 <Grid container spacing={2}>
                                                     <Grid item xs={12} sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                                                         <Box>
-                                                            <Typography variant="subtitle1">
-                                                                {item.heading}
-                                                            </Typography>
+                                                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                                                <Typography variant="subtitle1">
+                                                                    {item.heading}
+                                                                </Typography>
+                                                                <Chip
+                                                                    label={sourceBadge}
+                                                                    size="small"
+                                                                    variant="outlined"
+                                                                    color={item.source === 'lcnaf' ? 'secondary' : 'primary'}
+                                                                />
+                                                            </Box>
                                                             {item.uri && (
                                                                 <Link
-                                                                    href={`http://id.loc.gov${item.uri}`}
+                                                                    href={item.uri.startsWith('http') ? item.uri : `http://id.loc.gov${item.uri}`}
                                                                     target="_blank"
                                                                     rel="noopener noreferrer"
                                                                 >
@@ -251,18 +237,10 @@ const ScrapedResults = () => {
                                                         </Tooltip>
                                                     </Grid>
 
-                                                    {item.details && (
-                                                        <Grid item xs={12}>
-                                                            <Typography variant="body2" color="text.secondary">
-                                                                {item.details}
-                                                            </Typography>
-                                                        </Grid>
-                                                    )}
-
                                                     {item.datasetType && (
                                                         <Grid item xs={12} sm={6}>
                                                             <Typography variant="caption" color="text.secondary">
-                                                                Dataset Type: {item.datasetType}
+                                                                Dataset: {item.datasetType}
                                                             </Typography>
                                                         </Grid>
                                                     )}
@@ -270,53 +248,8 @@ const ScrapedResults = () => {
                                                     {item.identifier && (
                                                         <Grid item xs={12} sm={6}>
                                                             <Typography variant="caption" color="text.secondary">
-                                                                Identifier: {item.identifier}
+                                                                ID: {item.identifier}
                                                             </Typography>
-                                                        </Grid>
-                                                    )}
-
-                                                    {item.broaderTerms && item.broaderTerms.length > 0 && (
-                                                        <Grid item xs={12} sm={4}>
-                                                            <Typography variant="caption" color="text.secondary">
-                                                                Broader Terms:
-                                                            </Typography>
-                                                            <List dense>
-                                                                {item.broaderTerms.map((term, termIndex) => (
-                                                                    <ListItem key={termIndex} dense>
-                                                                        <ListItemText primary={term} />
-                                                                    </ListItem>
-                                                                ))}
-                                                            </List>
-                                                        </Grid>
-                                                    )}
-
-                                                    {item.narrowerTerms && item.narrowerTerms.length > 0 && (
-                                                        <Grid item xs={12} sm={4}>
-                                                            <Typography variant="caption" color="text.secondary">
-                                                                Narrower Terms:
-                                                            </Typography>
-                                                            <List dense>
-                                                                {item.narrowerTerms.map((term, termIndex) => (
-                                                                    <ListItem key={termIndex} dense>
-                                                                        <ListItemText primary={term} />
-                                                                    </ListItem>
-                                                                ))}
-                                                            </List>
-                                                        </Grid>
-                                                    )}
-
-                                                    {item.relatedTerms && item.relatedTerms.length > 0 && (
-                                                        <Grid item xs={12} sm={4}>
-                                                            <Typography variant="caption" color="text.secondary">
-                                                                Related Terms:
-                                                            </Typography>
-                                                            <List dense>
-                                                                {item.relatedTerms.map((term, termIndex) => (
-                                                                    <ListItem key={termIndex} dense>
-                                                                        <ListItemText primary={term} />
-                                                                    </ListItem>
-                                                                ))}
-                                                            </List>
                                                         </Grid>
                                                     )}
                                                 </Grid>
@@ -327,7 +260,7 @@ const ScrapedResults = () => {
                             </>
                         ) : (
                             <Typography color="text.secondary">
-                                No results found for this term in the Library of Congress Subject Headings.
+                                No results found for this term in the Library of Congress.
                                 {result.error && result.error !== 'No results found' && (
                                     <Box component="span" sx={{ display: 'block', mt: 1 }}>
                                         Error: {result.error}
@@ -360,4 +293,4 @@ const ScrapedResults = () => {
     );
 };
 
-export default ScrapedResults; 
+export default ScrapedResults;

@@ -1,7 +1,7 @@
 {
     "manifest_version": 3,
     "name": "LCSH Recommendation Tool",
-    "version": "1.0.1",
+    "version": "1.1.0",
     "description": "Suggests Library of Congress Subject Headings based on bibliographic information using Gemini API",
     "permissions": [
         "storage"
@@ -27,16 +27,6 @@
         "service_worker": "background.js",
         "type": "module"
     },
-    "content_scripts": [
-        {
-            "matches": [
-                "https://id.loc.gov/*"
-            ],
-            "js": [
-                "contentScript.js"
-            ]
-        }
-    ],
     "web_accessible_resources": [
         {
             "resources": [
