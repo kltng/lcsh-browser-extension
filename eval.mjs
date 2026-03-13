@@ -115,7 +115,7 @@ function findBestMatch(term, items) {
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 async function callGemini(requestBody) {
-  for (let attempt = 0; attempt <= 2; attempt++) {
+  for (let attempt = 0; attempt <= 3; attempt++) {
     const res = await fetch(`${GEMINI_API_URL}?key=${API_KEY}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -123,7 +123,16 @@ async function callGemini(requestBody) {
     });
     if (res.ok) return res.json();
     if (res.status === 429 || res.status >= 500) {
-      if (attempt < 2) { await sleep(Math.pow(2, attempt) * 1000); continue; }
+      const err = await res.json().catch(() => ({}));
+      if (attempt < 3) {
+        // Parse retry delay from error message, or use exponential backoff
+        const retryMatch = (err.error?.message || '').match(/retry in ([\d.]+)s/i);
+        const delay = retryMatch ? Math.ceil(parseFloat(retryMatch[1])) * 1000 + 1000 : Math.pow(2, attempt + 2) * 1000;
+        console.log(`    (429 — waiting ${Math.round(delay/1000)}s before retry ${attempt + 1}/3)`);
+        await sleep(delay);
+        continue;
+      }
+      throw new Error(`Gemini ${res.status}: ${err.error?.message || res.statusText}`);
     }
     const err = await res.json().catch(() => ({}));
     throw new Error(`Gemini ${res.status}: ${err.error?.message || res.statusText}`);
@@ -132,16 +141,40 @@ async function callGemini(requestBody) {
 
 async function searchSuggest2(url, query, count = 20) {
   const params = new URLSearchParams({ q: query, count: String(count) });
-  const res = await fetch(`${url}?${params}`);
-  if (!res.ok) throw new Error(`LOC API ${res.status}`);
-  const data = await res.json();
-  if (!data.hits || !Array.isArray(data.hits)) return [];
-  return data.hits.map(hit => ({
-    heading: hit.aLabel || hit.suggestLabel || '',
-    uri: hit.uri || '',
-    identifier: hit.uri ? hit.uri.split('/').pop() : '',
-    source: url.includes('subjects') ? 'lcsh' : 'lcnaf',
-  }));
+  for (let attempt = 0; attempt <= 2; attempt++) {
+    const res = await fetch(`${url}?${params}`, {
+      headers: { 'User-Agent': 'LCSH-Eval/1.0', 'Accept': 'application/json' },
+    });
+    if (res.status === 429 || res.status === 503) {
+      if (attempt < 2) { await sleep(2000 * (attempt + 1)); continue; }
+    }
+    if (!res.ok) return [];
+    const data = await res.json();
+    const source = url.includes('subjects') ? 'lcsh' : 'lcnaf';
+
+    // New format: {hits: [...]}
+    if (data && data.hits && Array.isArray(data.hits)) {
+      return data.hits.map(hit => ({
+        heading: hit.aLabel || hit.suggestLabel || '',
+        uri: hit.uri || '',
+        identifier: hit.uri ? hit.uri.split('/').pop() : '',
+        source,
+      })).filter(r => r.heading);
+    }
+    // Legacy format: [query, [labels], [uris]]
+    if (Array.isArray(data) && data.length >= 3) {
+      const labels = data[1] || [];
+      const uris = data[2] || [];
+      return labels.map((label, i) => ({
+        heading: label,
+        uri: uris[i] || '',
+        identifier: uris[i] ? uris[i].split('/').pop() : '',
+        source,
+      })).filter(r => r.heading);
+    }
+    return [];
+  }
+  return [];
 }
 
 function normalizeQuery(q) { return q.replace(/--/g, ' ').replace(/\s+/g, ' ').trim(); }
@@ -150,14 +183,24 @@ function extractMainHeading(h) { return h.split('--')[0].trim(); }
 async function searchLcsh(term) {
   const norm = normalizeQuery(term);
   let results = await searchSuggest2(LCSH_SUGGEST_URL, norm);
+  await sleep(500);
+  // Keyword search fallback
+  if (results.length === 0) {
+    results = await searchSuggest2(LCSH_SUGGEST_URL, 'keyword*' + norm);
+    await sleep(500);
+  }
+  // Main heading fallback for subdivided terms
   if (results.length === 0 && term.includes('--')) {
     results = await searchSuggest2(LCSH_SUGGEST_URL, extractMainHeading(term));
+    await sleep(500);
   }
   return results;
 }
 
 async function searchLcnaf(term) {
-  return searchSuggest2(LCNAF_SUGGEST_URL, normalizeQuery(term));
+  const results = await searchSuggest2(LCNAF_SUGGEST_URL, normalizeQuery(term));
+  await sleep(500);
+  return results;
 }
 
 // --- Pipeline (replicates extension flow) ---
@@ -177,7 +220,7 @@ ${record.notes ? `Additional Notes: ${record.notes}` : ''}
   const requestBody = {
     contents: [{ role: 'user', parts: [{ text: textContent }] }],
     systemInstruction: { parts: [{ text: systemPrompt }] },
-    generationConfig: { temperature: 0.2, topK: 40, topP: 0.95, maxOutputTokens: 2048 },
+    generationConfig: { temperature: 0.2, topK: 40, topP: 0.95, maxOutputTokens: 8192 },
   };
 
   const data = await callGemini(requestBody);
@@ -186,27 +229,57 @@ ${record.notes ? `Additional Notes: ${record.notes}` : ''}
 
 function parseSuggestions(response) {
   const content = response.candidates[0].content.parts[0].text;
+  const allTerms = new Set();
 
-  // Extract candidate terms from API Validation Process section
-  const apiMatch = content.match(/### \*\*API Validation Process\*\*\s+([\s\S]*?)(?=---)/);
-  const candidateText = apiMatch ? apiMatch[1] : '';
-  const candidates = [];
-  const termRe = /\d+\.\s+\*\*([^*]+)\*\*/g;
-  let m;
-  while ((m = termRe.exec(candidateText)) !== null) candidates.push(m[1].trim());
-
-  // Extract recommended terms
-  const recMatch = content.match(/### \*\*Recommended LCSH Terms\*\*\s+([\s\S]*?)(?=---)/);
-  const recText = recMatch ? recMatch[1] : '';
-  const recommended = [];
-  const sections = recText.split(/\d+\.\s+\*\*/).slice(1);
-  for (const sec of sections) {
-    const tm = sec.match(/([^*]+)\*\*/);
-    if (tm) recommended.push(tm[1].trim());
+  // Strategy 1: Extract from "API Validation Process" section
+  const apiMatch = content.match(/(?:API Validation|Candidate|validate)[^]*?(?=---|###\s|$)/i);
+  if (apiMatch) {
+    const termRe = /\d+\.\s*\*?\*?([^*\n]+)\*?\*?/g;
+    let m;
+    while ((m = termRe.exec(apiMatch[0])) !== null) {
+      const term = m[1].replace(/[*()✓✗]/g, '').replace(/Verified.*$/i, '').trim();
+      if (term && !term.match(/^(I will|Now calling|validate|the following)/i) && term.length > 2) {
+        allTerms.add(term);
+      }
+    }
   }
 
-  // Use candidates if we got them, otherwise fall back to recommended
-  const terms = candidates.length > 0 ? candidates : recommended;
+  // Strategy 2: Extract from "Recommended LCSH Terms" section
+  const recMatch = content.match(/Recommended LCSH Terms[^]*?(?=---|###\s*\*\*Special|$)/i);
+  if (recMatch) {
+    const sections = recMatch[0].split(/\d+\.\s+\*\*/).slice(1);
+    for (const sec of sections) {
+      const tm = sec.match(/([^*]+)\*\*/);
+      if (tm) {
+        const term = tm[1].replace(/[()✓✗]/g, '').replace(/Verified.*$/i, '').trim();
+        if (term && term.length > 2) allTerms.add(term);
+      }
+    }
+  }
+
+  // Strategy 3: Extract MARC fields (650, 600, 610, 651)
+  const marcRe = /(?:650|600|610|651)\s+.{2}\s+\$a\s+([^\n]+)/g;
+  let mm;
+  while ((mm = marcRe.exec(content)) !== null) {
+    const term = mm[1].replace(/\s*\$[a-z]\s*/g, '--').replace(/--$/, '').trim();
+    if (term.length > 2) allTerms.add(term);
+  }
+
+  // Strategy 4: Fallback — any bold terms that look like LCSH headings
+  if (allTerms.size === 0) {
+    const boldRe = /\*\*([^*]{3,80})\*\*/g;
+    let bm;
+    while ((bm = boldRe.exec(content)) !== null) {
+      const term = bm[1].trim();
+      // Skip section headers and non-LCSH text
+      if (!term.match(/^(Subject Analysis|API|Recommended|Special|Output|MARC|Justification|URL|LCSH)/i)
+          && !term.match(/^(Precision|Recall|Verified|Note)/i)) {
+        allTerms.add(term);
+      }
+    }
+  }
+
+  const terms = [...allTerms];
   return { terms, rawResponse: content };
 }
 
@@ -338,10 +411,10 @@ for (let i = 0; i < records.length; i++) {
 
     console.log(`  Exact F1: ${(metrics.exact.f1 * 100).toFixed(1)}% | Fuzzy F1: ${(metrics.fuzzy.f1 * 100).toFixed(1)}% | Main Heading F1: ${(metrics.mainHeading.f1 * 100).toFixed(1)}%`);
 
-    // Rate limit: wait between Gemini calls
+    // Rate limit: wait between Gemini calls (free tier: 10 RPM for gemini-2.5-flash)
     if (i < records.length - 1) {
-      console.log('  Waiting 5s (rate limit)...');
-      await sleep(5000);
+      console.log('  Waiting 15s (rate limit)...');
+      await sleep(15000);
     }
   } catch (err) {
     console.log(`  ERROR: ${err.message}`);
