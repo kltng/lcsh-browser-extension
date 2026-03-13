@@ -2,6 +2,8 @@ LCSH Recommendation Tool helps catalogers and librarians assign Library of Congr
 
 Powered by Google's Gemini 2.5 Flash, the extension analyzes bibliographic information — title, author, abstract, table of contents, and even images of book covers or title pages — and recommends validated LCSH headings with MARC records ready to use.
 
+Want a standalone web app instead? Try the LCSH Cataloging Assistant at https://assistant.cataloguer.name — a full-featured Progressive Web App (PWA) that supports multiple AI providers (OpenAI, Gemini, DeepSeek, and more), works offline, and requires no installation. Visit https://cataloguer.name for tutorials, setup guides, and documentation for all our cataloging tools.
+
 HOW IT WORKS
 
 1. Enter your free Gemini API key (get one at ai.google.dev)
@@ -33,4 +35,10 @@ GETTING STARTED
 
 You'll need a Google Gemini API key, which is available for free at ai.google.dev. Once installed, click the extension icon, enter your API key, and launch the tool. No account creation or sign-up required.
 
-Built for catalogers, by catalogers. Companion tools available at cataloguer.name.
+For step-by-step setup instructions, video tutorials, and tips on getting the best results, visit https://cataloguer.name.
+
+ALSO AVAILABLE AS A WEB APP
+
+Prefer not to install an extension? The LCSH Cataloging Assistant PWA at https://assistant.cataloguer.name offers the same core functionality plus support for multiple AI providers (OpenAI, Google Gemini, DeepSeek, Qwen, Groq, OpenRouter, and custom endpoints), batch processing, and offline access. No installation needed — just open it in your browser.
+
+Built for catalogers, by catalogers. Visit https://cataloguer.name to learn more.
