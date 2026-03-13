@@ -6,6 +6,32 @@
 
 const LCSH_SUGGEST_URL = 'https://id.loc.gov/authorities/subjects/suggest2';
 const LCNAF_SUGGEST_URL = 'https://id.loc.gov/authorities/names/suggest2';
+const LOC_USER_AGENT = 'LCSH-Browser-Extension/1.1 (https://github.com/kltng/lcsh-browser-extension)';
+
+/**
+ * Fetch from LOC API with retry on 429/503 (exponential backoff).
+ */
+const fetchLOCWithRetry = async (url, maxRetries = 2) => {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const response = await fetch(url, {
+      headers: {
+        'Accept': 'application/json',
+        'User-Agent': LOC_USER_AGENT,
+      },
+    });
+
+    if (response.ok) return response;
+
+    if ((response.status === 429 || response.status === 503) && attempt < maxRetries) {
+      const delay = Math.pow(2, attempt + 1) * 1000; // 2s, 4s
+      await new Promise(r => setTimeout(r, delay));
+      continue;
+    }
+
+    throw new Error(`LOC API error: ${response.status} ${response.statusText}`);
+  }
+  throw new Error('LOC API request failed after retries');
+};
 
 /**
  * Normalize a query for LOC search — strip subdivisions, clean up whitespace
@@ -40,11 +66,7 @@ const searchSuggest2 = async (url, query, count = 20) => {
   const params = new URLSearchParams({ q: query, count: String(count) });
   const fullUrl = `${url}?${params}`;
 
-  const response = await fetch(fullUrl);
-  if (!response.ok) {
-    throw new Error(`LOC API error: ${response.status} ${response.statusText}`);
-  }
-
+  const response = await fetchLOCWithRetry(fullUrl);
   const data = await response.json();
 
   // suggest2 response: { hits: [ { uri, aLabel, vLabel, ... } ] }
@@ -117,8 +139,11 @@ export const validateMultipleTerms = async (terms, onProgress) => {
   const results = {};
   let completed = 0;
 
+  // Trim whitespace from each term before validation
+  const trimmedTerms = terms.map(t => t.trim());
+
   // Process all terms with concurrency limit of 3
-  const queue = [...terms];
+  const queue = [...trimmedTerms];
   const concurrency = 3;
 
   const processNext = async () => {
@@ -143,13 +168,15 @@ export const validateMultipleTerms = async (terms, onProgress) => {
 
       completed++;
       if (onProgress) {
-        onProgress(completed, terms.length);
+        onProgress(completed, trimmedTerms.length);
       }
+      // Rate limit: space LOC requests to avoid overwhelming the API
+      await new Promise(r => setTimeout(r, 500));
     }
   };
 
   const workers = [];
-  for (let i = 0; i < Math.min(concurrency, terms.length); i++) {
+  for (let i = 0; i < Math.min(concurrency, trimmedTerms.length); i++) {
     workers.push(processNext());
   }
   await Promise.all(workers);
