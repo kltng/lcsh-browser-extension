@@ -146,7 +146,7 @@ const FinalRecommendations = () => {
         const recommendations = selectedRecommendations.length > 0 ? selectedRecommendations : sortedRecommendations;
 
         const csvContent = [
-            ['LCSH Term', 'MARC Record (Field 650)', 'LCSH ID', 'Justification', 'Similarity Score'],
+            ['LCSH Term', 'MARC Record', 'LCSH ID', 'Justification', 'Similarity Score'],
             ...recommendations
                 .filter(rec => rec.similarity > 30 && rec.bestMatch)
                 .map(rec => [
@@ -252,7 +252,7 @@ const FinalRecommendations = () => {
                 <Typography variant="body2" color="text.secondary" paragraph>
                     Below are the final LCSH recommendations based on the best matches found in the Library of Congress database.
                     Only terms with similarity scores above 30% are shown. Results are sorted by similarity score in descending order.
-                    MARC records are specifically for field 650 (Topical Terms).
+                    MARC records use field 650 (Topical Terms), 651 (Geographic Names), 600 (Personal Names), or 610 (Corporate Names).
                 </Typography>
 
                 <Box sx={{ display: 'flex', gap: 2, mb: 2 }}>
@@ -368,7 +368,7 @@ const FinalRecommendations = () => {
                                     </Grid>
 
                                     <Grid item xs={12}>
-                                        <Typography variant="subtitle2">MARC Record (Field 650):</Typography>
+                                        <Typography variant="subtitle2">MARC Record:</Typography>
                                         <TextField
                                             fullWidth
                                             variant="outlined"
