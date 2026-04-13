@@ -114,17 +114,20 @@ For each term, generate the appropriate MARC field record based on the source an
 
 Important: If the $a subfield is a geographic entity (e.g., a country, city, region like "Japan", "United States", "Paris"), use 651 even if the term has topical subdivisions like $x History or $x Economic conditions. The field is determined by the nature of the entry element in $a, not the subdivisions.
 
+Indicators: The first indicator is blank (space). The second indicator MUST be 0 for all headings sourced from LCSH or LCNAF (Library of Congress authorities). For example: 651 _0, 650 _0, 600 10, 610 20.
+
 Please follow these guidelines:
 1. Only generate MARC records for terms with similarity scores above 30%
 2. Use the correct MARC field based on the source (651 for LCSH geographic, 650 for LCSH topical, 600/610 for LCNAF)
-3. Include all necessary indicators and subfields
+3. Include all necessary indicators and subfields with second indicator 0
 4. Be precise and follow cataloging standards
 5. Format each record clearly
 
 For each term, provide ONLY the MARC record in the following format:
 \`\`\`marc
-[field] [indicators] $a [Main heading] $x [Subdivision] $z [Geographic subdivision] $y [Chronological subdivision]
+[field] [indicators] $a [Main heading] $x [General subdivision] $z [Geographic subdivision] $y [Chronological subdivision]
 \`\`\`
+Examples: 651 _0 $a Japan $x History $y 1868-, 650 _0 $a Economic development, 600 10 $a Gordon, Andrew.
 
 Only include the subfields that are necessary for each term. Do not include any explanations or additional text outside the MARC record format.
 `;
