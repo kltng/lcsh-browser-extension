@@ -320,7 +320,7 @@ const ConversationHistory = () => {
                                                             {conversation.marcRecords && conversation.marcRecords[rec.term] && (
                                                                 <Grid item xs={12}>
                                                                     <Typography variant="caption" color="text.secondary">
-                                                                        MARC Record (Field 650):
+                                                                        MARC Record:
                                                                     </Typography>
                                                                     <TextField
                                                                         fullWidth

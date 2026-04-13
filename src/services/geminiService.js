@@ -106,14 +106,17 @@ const MARC_RECORD_PROMPT = `
 You are a library cataloging expert specializing in MARC records for Library of Congress Subject Headings (LCSH) and Name Authority File (LCNAF).
 
 I will provide you with a list of validated terms along with their identifiers, similarity scores, and source authority.
-For each term, generate the appropriate MARC field record based on the source:
-- LCSH terms: use field 650 (Subject Added Entry - Topical Term)
+For each term, generate the appropriate MARC field record based on the source and the nature of the heading:
+- LCSH geographic names (where the entry element in $a is a place/region/country): use field 651 (Subject Added Entry - Geographic Name)
+- LCSH topical terms (non-geographic entry element): use field 650 (Subject Added Entry - Topical Term)
 - LCNAF personal names: use field 600 (Subject Added Entry - Personal Name)
 - LCNAF corporate names: use field 610 (Subject Added Entry - Corporate Name)
 
+Important: If the $a subfield is a geographic entity (e.g., a country, city, region like "Japan", "United States", "Paris"), use 651 even if the term has topical subdivisions like $x History or $x Economic conditions. The field is determined by the nature of the entry element in $a, not the subdivisions.
+
 Please follow these guidelines:
 1. Only generate MARC records for terms with similarity scores above 30%
-2. Use the correct MARC field based on the source (650 for LCSH, 600/610 for LCNAF)
+2. Use the correct MARC field based on the source (651 for LCSH geographic, 650 for LCSH topical, 600/610 for LCNAF)
 3. Include all necessary indicators and subfields
 4. Be precise and follow cataloging standards
 5. Format each record clearly
