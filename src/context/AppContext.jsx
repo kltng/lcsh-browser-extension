@@ -23,6 +23,17 @@ const DEFAULT_SYSTEM_PROMPT_RULES = `# LCSH Selection Rules
 12. For book covers or title pages, extract relevant subject information.
 13. Terms will be validated against both LCSH and LCNAF authorities.`;
 
+const MAX_CONVERSATION_HISTORY = 25;
+
+const handleStorageError = (fallbackMessage) => {
+    if (chrome.runtime.lastError) {
+        console.error(fallbackMessage, chrome.runtime.lastError);
+        return chrome.runtime.lastError.message || fallbackMessage;
+    }
+
+    return null;
+};
+
 export const AppProvider = ({ children }) => {
     // State for bibliographic information
     const [bibliographicInfo, setBibliographicInfo] = useState({
@@ -54,6 +65,12 @@ export const AppProvider = ({ children }) => {
     // Load API key from storage when component mounts
     useEffect(() => {
         chrome.storage.local.get(['geminiApiKey', 'systemPromptRules'], (result) => {
+            const storageError = handleStorageError('Failed to load settings from Chrome storage');
+            if (storageError) {
+                setError(storageError);
+                return;
+            }
+
             if (result.geminiApiKey) {
                 setApiKey(result.geminiApiKey);
             }
@@ -62,12 +79,23 @@ export const AppProvider = ({ children }) => {
                 setSystemPromptRules(result.systemPromptRules);
             } else {
                 // Save default system prompt rules to storage
-                chrome.storage.local.set({ systemPromptRules: DEFAULT_SYSTEM_PROMPT_RULES });
+                chrome.storage.local.set({ systemPromptRules: DEFAULT_SYSTEM_PROMPT_RULES }, () => {
+                    const saveError = handleStorageError('Failed to initialize system prompt rules');
+                    if (saveError) {
+                        setError(saveError);
+                    }
+                });
             }
         });
 
         // Load conversation history
         chrome.storage.local.get(['conversationHistory'], (result) => {
+            const storageError = handleStorageError('Failed to load conversation history');
+            if (storageError) {
+                setError(storageError);
+                return;
+            }
+
             if (result.conversationHistory) {
                 setConversationHistory(result.conversationHistory);
             }
@@ -77,7 +105,12 @@ export const AppProvider = ({ children }) => {
     // Reset system prompt rules to default
     const resetSystemPromptRules = () => {
         setSystemPromptRules(DEFAULT_SYSTEM_PROMPT_RULES);
-        chrome.storage.local.set({ systemPromptRules: DEFAULT_SYSTEM_PROMPT_RULES });
+        chrome.storage.local.set({ systemPromptRules: DEFAULT_SYSTEM_PROMPT_RULES }, () => {
+            const storageError = handleStorageError('Failed to reset system prompt rules');
+            if (storageError) {
+                setError(storageError);
+            }
+        });
     };
 
     // Save conversation to history
@@ -97,23 +130,38 @@ export const AppProvider = ({ children }) => {
             id: Date.now(),
             timestamp: new Date().toISOString(),
             ...conversationToSave
-        }];
+        }].slice(-MAX_CONVERSATION_HISTORY);
 
         setConversationHistory(updatedHistory);
-        chrome.storage.local.set({ conversationHistory: updatedHistory });
+        chrome.storage.local.set({ conversationHistory: updatedHistory }, () => {
+            const storageError = handleStorageError('Failed to save conversation history');
+            if (storageError) {
+                setError(storageError);
+            }
+        });
     };
 
     // Delete conversation from history
     const deleteConversation = (id) => {
         const updatedHistory = conversationHistory.filter(conv => conv.id !== id);
         setConversationHistory(updatedHistory);
-        chrome.storage.local.set({ conversationHistory: updatedHistory });
+        chrome.storage.local.set({ conversationHistory: updatedHistory }, () => {
+            const storageError = handleStorageError('Failed to delete conversation history item');
+            if (storageError) {
+                setError(storageError);
+            }
+        });
     };
 
     // Clear all conversation history
     const clearConversationHistory = () => {
         setConversationHistory([]);
-        chrome.storage.local.remove(['conversationHistory']);
+        chrome.storage.local.remove(['conversationHistory'], () => {
+            const storageError = handleStorageError('Failed to clear conversation history');
+            if (storageError) {
+                setError(storageError);
+            }
+        });
     };
 
     // Context value
@@ -151,4 +199,4 @@ export const AppProvider = ({ children }) => {
     );
 };
 
-export default AppContext; 
+export default AppContext;

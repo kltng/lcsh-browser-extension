@@ -288,7 +288,7 @@ const ConversationHistory = () => {
                                                                     </Typography>
                                                                     <Button
                                                                         size="small"
-                                                                        href={`http://id.loc.gov${rec.bestMatch.uri}`}
+                                                                        href={rec.bestMatch.uri.startsWith('http') ? rec.bestMatch.uri : `https://id.loc.gov${rec.bestMatch.uri}`}
                                                                         target="_blank"
                                                                         rel="noopener noreferrer"
                                                                         sx={{ ml: 1, minWidth: 'auto', p: '2px 8px', fontSize: '0.75rem' }}
@@ -489,4 +489,4 @@ const ConversationHistory = () => {
     );
 };
 
-export default ConversationHistory; 
+export default ConversationHistory;

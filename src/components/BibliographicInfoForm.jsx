@@ -103,7 +103,8 @@ const BibliographicInfoForm = () => {
                     reader.onload = () => resolve({
                         data: reader.result,
                         name: image.name,
-                        type: image.type
+                        type: image.type,
+                        size: image.size
                     });
                     reader.onerror = reject;
                     reader.readAsDataURL(image.file);
@@ -149,6 +150,10 @@ const BibliographicInfoForm = () => {
                 ...bibliographicInfo,
                 images: imageData
             };
+            setBibliographicInfo({
+                ...bibliographicInfo,
+                images: imageData.map(({ name, type, size }) => ({ name, type, size }))
+            });
 
             // Generate LCSH suggestions using the Gemini API
             const response = await generateLcshSuggestions(
@@ -339,4 +344,4 @@ const BibliographicInfoForm = () => {
     );
 };
 
-export default BibliographicInfoForm; 
+export default BibliographicInfoForm;

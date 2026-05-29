@@ -31,6 +31,9 @@ const theme = createTheme({
             main: '#dc004e',
         },
     },
+    typography: {
+        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+    },
 });
 
 // Step labels
@@ -106,4 +109,4 @@ const AppWithProvider = () => (
 // Render the App
 const container = document.getElementById('root');
 const root = createRoot(container);
-root.render(<AppWithProvider />); 
+root.render(<AppWithProvider />);
