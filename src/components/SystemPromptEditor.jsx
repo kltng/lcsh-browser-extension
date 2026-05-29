@@ -41,6 +41,11 @@ const SystemPromptEditor = () => {
     const handleSave = () => {
         // Save to Chrome storage
         chrome.storage.local.set({ systemPromptRules }, () => {
+            if (chrome.runtime.lastError) {
+                showSnackbar(chrome.runtime.lastError.message || 'Failed to save system prompt rules', 'error');
+                return;
+            }
+
             showSnackbar('System prompt rules saved successfully', 'success');
         });
     };
@@ -122,4 +127,4 @@ const SystemPromptEditor = () => {
     );
 };
 
-export default SystemPromptEditor; 
+export default SystemPromptEditor;

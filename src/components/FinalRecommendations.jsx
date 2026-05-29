@@ -29,6 +29,13 @@ import SimilarityScore from './SimilarityScore';
 import { generateMarcRecords } from '../services/geminiService';
 import ReactMarkdown from 'react-markdown';
 
+const escapeCsvCell = (value) => {
+    const stringValue = value === undefined || value === null ? '' : String(value);
+    const safeValue = /^[=+\-@]/.test(stringValue.trimStart()) ? `'${stringValue}` : stringValue;
+
+    return `"${safeValue.replace(/"/g, '""')}"`;
+};
+
 const FinalRecommendations = () => {
     const {
         bibliographicInfo,
@@ -156,7 +163,7 @@ const FinalRecommendations = () => {
                     rec.justification,
                     rec.similarity || 0
                 ])
-        ].map(row => row.map(cell => `"${cell}"`).join(',')).join('\n');
+        ].map(row => row.map(escapeCsvCell).join(',')).join('\n');
 
         const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
         const url = URL.createObjectURL(blob);
@@ -316,7 +323,7 @@ const FinalRecommendations = () => {
                                             )}
                                             {bestMatch.uri && (
                                                 <MuiLink
-                                                    href={bestMatch.uri.startsWith('http') ? bestMatch.uri : `http://id.loc.gov${bestMatch.uri}`}
+                                                    href={bestMatch.uri.startsWith('http') ? bestMatch.uri : `https://id.loc.gov${bestMatch.uri}`}
                                                     target="_blank"
                                                     rel="noopener noreferrer"
                                                     sx={{ ml: 1 }}
@@ -446,4 +453,4 @@ const FinalRecommendations = () => {
     );
 };
 
-export default FinalRecommendations; 
+export default FinalRecommendations;

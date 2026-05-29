@@ -16,6 +16,17 @@ import {
 } from '@mui/material';
 import { Visibility, VisibilityOff, Launch } from '@mui/icons-material';
 
+const storageSet = (values, onSuccess, onError) => {
+    chrome.storage.local.set(values, () => {
+        if (chrome.runtime.lastError) {
+            onError(chrome.runtime.lastError.message || 'Failed to save settings');
+            return;
+        }
+
+        onSuccess();
+    });
+};
+
 const Popup = () => {
     const [apiKey, setApiKey] = useState('');
     const [showApiKey, setShowApiKey] = useState(false);
@@ -27,6 +38,11 @@ const Popup = () => {
     useEffect(() => {
         // Load API key from storage when component mounts
         chrome.storage.local.get(['geminiApiKey'], (result) => {
+            if (chrome.runtime.lastError) {
+                showSnackbar(chrome.runtime.lastError.message || 'Failed to load API key', 'error');
+                return;
+            }
+
             if (result.geminiApiKey) {
                 setApiKey(result.geminiApiKey);
                 setIsApiKeyValid(true);
@@ -47,9 +63,11 @@ const Popup = () => {
         }
 
         // Save API key to Chrome storage
-        chrome.storage.local.set({ geminiApiKey: apiKey }, () => {
+        storageSet({ geminiApiKey: apiKey.trim() }, () => {
             setIsApiKeyValid(true);
             showSnackbar('API key saved successfully', 'success');
+        }, (message) => {
+            showSnackbar(message, 'error');
         });
     };
 
@@ -157,4 +175,4 @@ const Popup = () => {
 
 const container = document.getElementById('root');
 const root = createRoot(container);
-root.render(<Popup />); 
+root.render(<Popup />);

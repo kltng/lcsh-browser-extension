@@ -220,7 +220,7 @@ const ScrapedResults = () => {
                                                             </Box>
                                                             {item.uri && (
                                                                 <Link
-                                                                    href={item.uri.startsWith('http') ? item.uri : `http://id.loc.gov${item.uri}`}
+                                                                    href={item.uri.startsWith('http') ? item.uri : `https://id.loc.gov${item.uri}`}
                                                                     target="_blank"
                                                                     rel="noopener noreferrer"
                                                                 >

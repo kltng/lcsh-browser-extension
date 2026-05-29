@@ -3,6 +3,8 @@ dist/
 build/
 *.log
 .DS_Store
+*.crx
+*.pem
 
 building_prompt.md
 refs/
