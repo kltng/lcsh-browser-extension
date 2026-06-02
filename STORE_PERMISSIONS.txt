@@ -1,0 +1,25 @@
+CHROME WEB STORE — PERMISSION JUSTIFICATIONS
+==============================================
+
+STORAGE PERMISSION
+------------------
+
+The extension uses chrome.storage.local to store three things:
+
+1. Gemini API key — so users don't need to re-enter it each session
+2. Conversation history — so users can revisit previous cataloging sessions
+3. System prompt settings — so users can customize the AI's behavior and keep those preferences between sessions
+
+All data is stored locally in the user's browser. Nothing is sent to external servers beyond the necessary API calls to Google Gemini (for AI recommendations) and id.loc.gov (for LCSH/LCNAF authority validation). Users can clear all stored data through the extension's built-in history management options.
+
+
+HOST PERMISSIONS
+----------------
+
+The extension requires host permissions for two domains:
+
+1. id.loc.gov — To query the Library of Congress suggest2 API for validating AI-suggested terms against the official LCSH and LCNAF authority files. Each suggested heading is checked against id.loc.gov to confirm it is an authorized Library of Congress term.
+
+2. generativelanguage.googleapis.com — To connect to the Google Gemini API for generating LCSH candidate terms from bibliographic information (title, author, abstract, images, etc.). The user provides their own API key.
+
+No other host permissions are requested. These two connections are the core of the extension's workflow: Gemini generates candidate headings, then id.loc.gov validates them.
