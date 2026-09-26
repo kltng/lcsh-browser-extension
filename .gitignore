@@ -8,3 +8,14 @@ build/
 
 building_prompt.md
 refs/
+
+# secrets
+.env
+.env.*
+
+# multi-agent dispatch artifacts (prompts, logs, results: contain local paths and session data)
+.dispatch/
+*_output.log
+*_result.json
+# throwaway Chrome profile for live tests
+.dev-profile/
