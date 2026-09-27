@@ -1,385 +1,571 @@
 # SPEC-P5 — Local LCSH database in the extension
 
-Status: DRAFT v1 (for review), 2026-09-27. Builds on SPEC-P4 (lookup
-interface, Candidate, honesty rule) and on the builder contract
-(`lcsh-db-builder` docs/SPEC.md v3.3 and docs/SCHEMA_QUERIES.md v2). The
-round-1 extension review findings about the database (#1, #2, #20, #22, #23,
-#24, #27, #28, #29, #30) are answered here; §15 maps them.
+Status: v2, 2026-09-27. v1 was REJECTED (14 findings, 4 HIGH;
+`.dispatch/spec-review-p5-1/last_message.md`; v1 archived at
+`.dispatch/SPEC-P5.v1.md`). §16 maps each finding to its fix. Builds on
+SPEC-P4 (lookup step, Candidate, honesty rule) and the builder contract
+(`lcsh-db-builder` docs/SPEC.md v3.3, docs/SCHEMA_QUERIES.md v2).
 
 ## 0. Goals, owner decisions, non-goals
 
 Goals:
-1. A second lookup backend, `local-db`, that answers the same `lookup()`
-   contract as the LOC API backend (SPEC-P4 §4), so selection, MARC, history
-   and exports work unchanged.
+1. A second lookup backend, `local-db`, behind the P4 backend interface, so
+   selection, MARC, history and exports keep their P4 guarantees.
 2. Download, verify, install, update and remove the database from the
    builder's Hugging Face dataset `kltng/lcsh-db-lite`.
 
 Owner decisions (binding):
-- Profiles: `core` (LCSH + LCGFT) is the default. `full` (+ LCNAF) is an
-  opt-in "advanced" choice with a clear size warning. Measured on the lead's
-  reference build (2026-09-27): core 62 MB download / 205 MB on disk; full
+- `core` (LCSH + LCGFT) is the default. `full` (+ LCNAF) is an opt-in
+  "advanced" choice with a clear size warning. Lead-measured on the real
+  builder output (2026-09-27): core 62 MB download / 205 MB on disk; full
   1.87 GB download / 5.4 GB on disk.
 - With `core`, names (LCNAF) are looked up online at LOC.
-- With `full`, LCNAF rows have no MARC key; the key is fetched online from
-  LOC when a name is chosen ("online fallback"). Offline → "MARC not
-  available offline".
+- With `full`, LCNAF rows have no MARC key; it is fetched online from LOC for
+  chosen names (§7).
 
 Honesty rule (SPEC-P4 §0) carries over: an LC ID, link, label or MARC key
-shown to the user comes from a real record (LOC response or the verified
-database), never from the model.
+shown to the user comes from a real record (a validated LOC response or the
+verified database), never from the model. A variant match never becomes an
+automatic exact acceptance (§6.3).
 
-Non-goals: the database is never written by the extension (read-only); no
-download resume; no background download when the tab is closed; no
-offscreen document.
+Non-goals: the extension never writes the database's contents; no download
+resume; no download that survives closing the owner tab; no offscreen
+document; no CJK substring search (the published tokenizer cannot do it;
+SCHEMA_QUERIES "CJK limitation").
 
 ## 1. Files
 
 New:
-- `src/services/localdb/worker.js` — the database worker (module Worker).
-- `src/services/localdb/client.js` — page-side RPC client + ownership lock.
-- `src/services/localdb/install.js` — download/verify/install state machine
-  (runs inside the worker; the page only sends commands).
+- `src/services/localdb/worker.js` — the database worker.
+- `src/services/localdb/client.js` — the ONE page-side owner client (§3).
+- `src/services/localdb/install.js` — the install/update/uninstall protocol
+  (§4), run in the worker; settings commits go through the §3.3 bridge.
 - `src/services/localdb/pointer.js` — `latest.json` fetch + validation.
-- `src/services/localdb/sql.js` — the SCHEMA_QUERIES Q1–Q5 text, copied
-  byte-for-byte, plus the MATCH builder. Pure module (Node-testable).
-- `src/services/localdb/sha256.js` — streaming SHA-256 (§4.4).
-- `src/services/lookup/localDb.js` — the `local-db` lookup backend (§6).
-- `src/services/lookup/hybrid.js` — per-authority delegation to the LOC API
-  backend (§6.4).
-- `src/services/pipeline/nameKeys.js` — online MARC-key fallback for LCNAF
-  (§7).
+- `src/services/localdb/sql.js` — SCHEMA_QUERIES Q1–Q5 text copied
+  byte-for-byte + the Q3 MATCH builder. Pure module (Node-testable).
+- `src/services/localdb/sha256.js` — a narrow wrapper over the pinned
+  `@noble/hashes` incremental SHA-256.
+- `src/services/lookup/localDb.js` — local query layer + row mapper (§5–§6).
+- `src/services/lookup/coordinator.js` — the ONE stage coordinator for
+  `loc-api`, `local-db` and mixed routing (§6.1).
+- `src/services/pipeline/nameKeys.js` — the name-key operation (§7).
 - `src/components/LocalDbSettings.jsx` — the settings section (§8).
-- `src/services/localdb/__fixtures__/` — lead-supplied fixture databases
-  (§12).
+- `src/services/localdb/__fixtures__/` — lead-supplied fixture databases.
 
-Changed: `lookup/index.js` (backend choice), `pipeline/types.js`
-(`source` may be `'local-db'`), `settings.js` (§2), `history.js` (backend
-provenance), `manifest.json` (§10), `webpack.config.js` (copy the wasm file),
-`SettingsPage.jsx`, `pipeline/run.js`/`workflow.js` (the §7 step).
+Changed: `lookup/locApi.js` (extract an authority-scoped request helper; the
+`loc-api` behavior stays byte-for-byte the same, §6.1), `lookup/index.js`,
+`pipeline/types.js` (`source` `'loc-api' | 'local-db'`; new error kind
+`local_db`; new MARC reasons §7), `settings.js` (§2), `history.js` (§9),
+`pipeline/exports.js` (§9 `marc_reason`), `pipeline/workflow.js` / `run.js`
+(§6.5, §7), `components/pipelineText.js`, `SettingsPage.jsx`,
+`manifest.json` (§10), `webpack.common.js` (copy the wasm file),
+`package.json` (+ `@sqlite.org/sqlite-wasm` 3.53.4-build1 and
+`@noble/hashes`, both exact versions; the lead runs `npm install`).
 
-## 2. Settings and installed-database record
+## 2. Settings
 
-Under the existing `'lcsh-settings'` Web Lock (SPEC-P3), `settings.js` gains:
+Under the `'lcsh-settings'` Web Lock (SPEC-P3), `settings.js` gains:
 - `lookupBackend`: `'loc-api'` (default) | `'local-db'`.
-- `localDb`: `null` or `{profile, release, releaseCommit, file, dbSize,
-  sha256Db, schemaVersion, normalizeVersion, compatFingerprint, installedAt,
-  lastUpdateCheckAt}`. It is written ONLY by the installer after a verified
-  install (§4.6) and cleared by uninstall.
-- `lookupBackend: 'local-db'` without a valid `localDb` → treated as
-  `'loc-api'`, with a visible notice "Local database not installed; using
-  the Library of Congress online."
+- `localDb`: `null` or the installed record `{profile, release,
+  releaseCommit, file, dbSize, sha256Db, compatFingerprint, installedAt}`.
+  It changes ONLY at the §4.5 commit point or the §4.7 uninstall commit.
+- `localDbPendingDeletes`: array of pool file names to delete later (§4.6).
+- `localDbUpdateCheck`: `{lastCheckedAt, latestSeen}` (outside the installed
+  record).
+- `lookupBackend: 'local-db'` with `localDb: null` → runs use `loc-api` and
+  show "Local database not installed; using the Library of Congress online."
 
-## 3. Worker and ownership
+"Already installed" = the same `profile`, `release`, `sha256Db` and
+`compatFingerprint`.
 
-**One owner per browser profile.** The SQLite OPFS SAH-pool VFS needs
-exclusive access (review #1). The page acquires the Web Lock
-`'lcsh-localdb-owner'` (mode exclusive, `ifAvailable: true`) BEFORE it
-creates the worker, and holds it until the worker is terminated.
+## 3. Ownership, worker, page lifetime
+
+### 3.1 One owner per browser profile
+
+The SAH-pool VFS needs exclusive access, even for read-only use.
+- The popup NEVER acquires ownership. Only `app.html` does.
+- ONE client object per app document, created at module level above the
+  hash-route components (the workflow and `#settings` share it). Hash
+  navigation never terminates it.
+- On start the client requests the Web Lock `'lcsh-localdb-owner'`
+  (exclusive, `ifAvailable: true`) BEFORE creating the worker, and keeps it
+  until the document ends. Correctness never depends on an unload handler:
+  the browser releases the lock when the document is gone.
 - Lock not available → no worker in this tab. The tab shows "The local
-  database is open in another tab of this extension" with two buttons: "Use
-  the Library of Congress online in this tab" (this tab's runs use
-  `loc-api`; the setting is not changed) and "Try again".
-- The lock is released only after `worker.terminate()` (on page unload, or
-  when the user uninstalls).
-- Only the owner tab may install, update or uninstall.
+  database is open in another tab of this extension" with "Use the Library of
+  Congress online in this tab" (this tab's runs use `loc-api`; settings
+  unchanged) and "Try again" (a new `ifAvailable` request; takeover after the
+  owner tab closed).
+- Lock order is always owner → settings. Settings operations never wait for
+  ownership.
 
-**Worker.** Created once per owner page:
-`new Worker(new URL('./worker.js', import.meta.url), {type: 'module'})`.
-- It loads `@sqlite.org/sqlite-wasm` (pinned exact version, the same as the
-  builder's wasm check: 3.53.4-build1) from the extension package. The
-  `.wasm` file is copied into `dist/` by webpack. No remote code.
-- VFS: `installOpfsSAHPoolVfs({name: 'lcsh-pool'})`.
-- The active database is opened read-only (`flags: 'r'`).
+### 3.2 Worker and RPC
 
-**RPC.** Page → worker `{id, op, args}`; worker → page `{id, ok, result}` or
-`{id, ok: false, error: {kind, message}}`; plus progress events `{event:
-'progress', ...}`. Ops: `status`, `query` (a named query from `sql.js` with
-bound parameters — never raw SQL), `installStart`, `installCancel`,
-`uninstall`, `meta`.
-- Worker error or crash (`error`/`messageerror` event, or no answer to a
-  `status` ping within 10 s): all pending RPCs are rejected with
-  `kind: 'db_worker_failed'`; the client terminates the worker, releases the
-  lock, and a later call re-creates both once. A second crash in one page
-  life → the tab falls back to `loc-api` with a notice.
+- `new Worker(new URL('./worker.js', import.meta.url), {type: 'module'})`,
+  loading the packaged `@sqlite.org/sqlite-wasm` 3.53.4-build1 (the builder's
+  wasm check uses the same version). No remote code.
+- `installOpfsSAHPoolVfs({name: 'lcsh-pool'})`. A pool-busy error is reported
+  as contention (`kind: 'db_busy'`), never as corruption.
+- RPC page → worker `{id, op, args, generation}`; worker → page `{id, ok,
+  result}` / `{id, ok: false, error: {kind, message}}`; progress events.
+  Ops: `status`, `query` (a named query from `sql.js` + bound parameters;
+  never raw SQL), `install`, `cancel`, `uninstall`.
+- Worker crash (`error`/`messageerror`, or no `status` answer within 10 s):
+  pending RPCs reject with `db_worker_failed`; the client terminates the
+  worker and creates one new worker while still holding the lock. A second
+  crash in one document life → this tab uses `loc-api`, with a notice.
+
+### 3.3 Settings bridge
+
+The worker cannot call `chrome.storage`. Every settings read/write the
+installer needs is a worker → page request `{bridgeId, generation,
+operationId, action: 'read' | 'commit', expected, next}` handled by the
+client with `settings.js` under `'lcsh-settings'`. `commit` rereads the
+current value and writes `next` only if the current value equals
+`expected`; it answers after the write is confirmed (`{ok, current}`). A
+request with a stale `generation` is refused.
+
+### 3.4 Startup recovery (before the client is ready)
+
+1. Hold the owner lock; create the worker; install the VFS.
+2. Read settings through the bridge. A read or validation failure → keep ALL
+   pool files, state `recovery-unavailable` ("Local database settings could
+   not be read"), serve no local queries, `loc-api` for runs.
+3. Recorded active file (`localDb.file`): open read-only and validate it
+   cheaply: §4.5 steps 5–6, and `page_count × page_size` = `localDb.dbSize`
+   (the full hash was checked at install; it is not repeated at every
+   start). Missing or failing → state `repair-needed` ("The local
+   database is damaged or missing" + Repair / Uninstall). Never promote
+   another file because it exists.
+4. Delete every pool file that is not the active file (leftover staging
+   files and `localDbPendingDeletes` entries). Deletion is idempotent (an
+   absent file counts as deleted). Successful or absent entries are removed
+   from `localDbPendingDeletes`; failures stay. The active file is never
+   deleted here.
+5. Then the client is ready and queries are served.
 
 ## 4. Install, update, uninstall
 
-### 4.1 Pointer
+### 4.1 One mutation at a time
+
+The worker runs at most ONE mutation (install, repair, uninstall), with an
+`operationId`. Another mutation request while one runs is refused ("Another
+database operation is running"). `cancel` names the `operationId`.
+
+### 4.2 Pointer
 
 `GET https://huggingface.co/datasets/kltng/lcsh-db-lite/resolve/main/latest.json`
-(`cache: 'no-store'`). Validate (all required, exact types):
-`pointer_version === 1`, `schema_version === 2`,
-`normalize_version === 'NORMALIZE_V1'`, `compat_fingerprint` in the
-extension's allowlist `SUPPORTED_FINGERPRINTS` (a constant), `release`
-matches `^\d{4}\.\d{2}\.\d{2}\.\d+$`, `release_commit` is 40 hex,
-`profiles.{core,full}` each with `url_pinned` (must start with
-`https://huggingface.co/datasets/kltng/lcsh-db-lite/resolve/<release_commit>/releases/<release>/`),
-`gz_size`, `db_size` (positive integers), `sha256_gz`, `sha256_db` (64 hex).
-- An unsupported version or fingerprint → "A newer database format is
-  available; update the extension to use it." The installed database (if
-  any) stays usable.
-- Release order compares the four numbers numerically (never as strings).
+with `cache: 'no-store'`, `credentials: 'omit'`, `referrerPolicy:
+'no-referrer'`, a 20 s timeout, and HTTP 200 required. Validate (all
+required, exact types):
+- `pointer_version === 1`, `schema_version === 2`,
+  `normalize_version === 'NORMALIZE_V1'`, `compat_fingerprint` in the
+  extension's `SUPPORTED_FINGERPRINTS` constant;
+- `release` matches `^(\d{4})\.(\d{2})\.(\d{2})\.([1-9]\d*)$` and is a real
+  date; releases compare as four numbers;
+- `release_commit` is 40 lowercase hex;
+- for each profile: `gz_size`, `db_size` are positive safe integers;
+  `sha256_gz`, `sha256_db` are 64 lowercase hex; `url_pinned` parses with
+  `new URL()` to protocol `https:`, host `huggingface.co`, no username,
+  password, query or fragment, and a pathname EXACTLY equal to
+  `/datasets/kltng/lcsh-db-lite/resolve/<release_commit>/releases/<release>/lcsh-<profile>.db.gz`
+  (string equality after parsing, which also rejects dot-segments and
+  encoded separators).
+- The installer uses only the pointer's profile entries. It does not read the
+  manifest or the index files.
+- Unsupported version or fingerprint → "A newer database format is available;
+  update the extension to use it." The installed database stays usable.
 
-### 4.2 Confirmation
+### 4.3 Confirmation
 
-Before any download the page shows: profile, release date, download size,
-disk size, the space needed during install (§4.5), and for `full` the
-warning "Large download (about 1.9 GB) and about 5.4 GB of disk space. Keep
-this tab open until it finishes." The user confirms with a click (the
-click also calls `navigator.storage.persist()`; its result is only shown,
-not required).
+Before any download the page shows: profile, release, download size,
+database size, the additional space the install needs (`db_size`, while the
+old database still exists), and the peak database storage during install
+(old `dbSize` + new `db_size`), plus "Keep this tab open until it finishes."
+For `full`: "Large download (about 1.9 GB) and about 5.4 GB of disk space."
+Sizes come from the pointer. `navigator.storage.estimate()` is shown only as
+"estimated storage used by this extension / quota", never as free disk
+space. The confirming click also calls `navigator.storage.persist()` (the
+result is shown, not required).
 
-### 4.3 Stream and import (inside the worker)
+### 4.4 Stream and import (worker)
 
-1. `fetch(url_pinned)` (the worker fetches; nothing is posted between
-   threads). HF answers with CORS for extension origins and redirects to its
-   CDN, which also sends CORS headers (lead probe 2026-09-27), so no new
-   host permission is needed.
-2. A counting pass-through computes `sha256_gz` and the compressed byte
-   count while bytes flow.
-3. `DecompressionStream('gzip')`.
-4. A second pass-through computes `sha256_db` and the decompressed byte
-   count.
-5. `poolUtil.importDb(stagingName, pullCallback)` with a PULL callback that
-   reads the next chunk; `undefined` = end. The FIRST chunk given to
-   `importDb` is at least 512 bytes (smaller leading chunks are coalesced;
-   review #2 on the SQLite header check).
-6. Backpressure is natural (the callback pulls). Memory stays bounded to one
-   chunk plus the stream buffers.
-7. Progress events every ≥ 500 ms: compressed bytes / `gz_size`.
-8. Network idle timeout: no bytes for 60 s → abort with `kind:
-   'network_stalled'`.
-9. `installCancel` aborts the fetch; the importer stops at the next pull;
-   the staging file is deleted.
+1. Staging name `/stage-<profile>-<release>-<8 random hex>.db`; regenerate
+   while it equals any existing pool file name. Never the active name.
+2. `fetch(url_pinned, {credentials: 'omit', referrerPolicy: 'no-referrer'})`;
+   HTTP 200 required. HF redirects to its CDN; both send CORS headers for
+   extension origins (lead probe 2026-09-27). The production package is
+   checked in a fresh profile without optional grants (§13).
+3. Pass-through 1: compressed byte count + `sha256_gz`. Abort as soon as the
+   count exceeds `gz_size`.
+4. `DecompressionStream('gzip')`.
+5. Pass-through 2: decompressed byte count + `sha256_db`. Abort as soon as it
+   exceeds `db_size`.
+6. `poolUtil.importDb(stagingName, pull)`; `pull` returns the next chunk or
+   `undefined` at the end. The first chunk given to the importer is at least
+   512 bytes (smaller leading chunks are coalesced).
+7. Progress events at most every 500 ms (compressed bytes / `gz_size`).
+8. No bytes for 60 s → abort (`network_stalled`).
+9. `cancel` before the commit point (§4.5 step 7): abort the fetch, stop at
+   the next pull, delete the staging file, keep the old installation.
 
-`stagingName` = `/stage-<profile>-<release>-<8 random hex>.db`: never the
-active file name, even for the same release (review #22).
+### 4.5 Verify, commit, switch
 
-### 4.4 Streaming SHA-256
+1. Stream counts and both stream hashes must equal the pointer's values.
+2. Open the staging file read-only (the new handle is kept open).
+3. **Stored-byte check** (the importer ignores short writes): read the
+   database back AS SQLITE SEES IT: `SELECT pgno, data FROM sqlite_dbpage
+   WHERE pgno BETWEEN ?1 AND ?2 ORDER BY pgno` in bounded batches (≤ 8 MiB
+   per batch), requiring consecutive page numbers and full-size pages. The
+   concatenated pages must have exactly `db_size` bytes
+   (`page_count × page_size`) and SHA-256 `sha256_db`. (`sqlite_dbpage` is
+   compiled into the pinned 3.53.4 build: lead probe 2026-09-27. For a
+   DELETE-mode database, pages 1…N are the file's bytes. The builder
+   publishes DELETE mode, whose header bytes 18–19 are already 1, 1, so the
+   importer's header rewrite changes nothing: lead-checked on the real core
+   and full files. Raw pool-handle offsets are NOT used: pool files carry a
+   pool header. `exportFile()` is not used: it allocates the whole file.)
+4. Any mismatch in 1 or 3 → close the handle, delete staging, keep the old
+   installation, "The download was damaged; nothing was changed."
+5. `db_meta`: `profile` equals the SELECTED profile; `schema_version` =
+   `'2'`; `normalize_version` = `'NORMALIZE_V1'`; `lh_format` = `'LH1'`;
+   `compat_fingerprint` = the pointer's.
+6. `sqlite_master` has exactly these application objects by name:
+   `db_meta`, `auth`, `alt_label`, `hierarchy`, `auth_fts`, `alt_label_fts`
+   (FTS shadow tables and indexes are allowed).
+7. **Commit point.** Gate queries (new queries wait; running ones finish).
+   Bridge `commit` with `expected` = the current `localDb` record and
+   `next` = `{localDb: newRecord, localDbPendingDeletes: [...current,
+   oldFile]}` (old file only if there was one). The confirmed write is the
+   commit. From this moment `cancel` is refused ("Finishing install").
+   - Write refused (someone else changed settings) or failed → close the new
+     handle, delete staging, reopen nothing new, ungate, report; the old
+     installation is untouched.
+   - Write result uncertain (bridge error after sending) → reread settings;
+     whichever record they hold decides which file stays active.
+8. Switch: the worker's active handle becomes the new handle; the old handle
+   is closed; ungate.
+9. Delete the old file (never while open). Success → a bridge commit removes
+   it from `localDbPendingDeletes`; failure → it stays there for §3.4.
 
-`crypto.subtle.digest` cannot stream. `sha256.js` is a small incremental
-SHA-256 (update/final). Choice to settle in review: a vetted dependency
-(`@noble/hashes`, pinned) or ~100 lines of own code tested against NIST
-vectors plus a 3 MB random buffer checked with `crypto.subtle`.
+A crash at any point leaves settings naming either the old file (commit not
+done) or the new file (commit done); §3.4 then cleans up. There is never a
+window where settings name a file that does not exist, except by external
+deletion (→ `repair-needed`).
 
-### 4.5 Verify, activate, clean up
+### 4.6 Install the same release, update check
 
-After the stream ends:
-1. Sizes and both hashes must equal the pointer's values. Any mismatch →
-   delete the staging file, error "The download was damaged; nothing was
-   changed."
-2. Open the staging file read-only. `db_meta` must have `profile`,
-   `schema_version = 2`, `normalize_version = NORMALIZE_V1`,
-   `compat_fingerprint` = the pointer's; the six tables and FTS tables must
-   exist. (No `PRAGMA quick_check`: the verified sha256 already proves the
-   bytes are the published ones, and a quick check of 5.4 GB takes minutes.)
-3. Activate: write the new `localDb` record (settings lock), then switch the
-   worker's open handle to the new file, then delete the old active file.
-4. If deletion of the old file fails → keep going; record it in
-   `pendingDeletes` (settings) and retry on the next start.
-5. Space: the install needs `db_size` for the staging file while the old
-   database still exists. The page shows "About X GB free space needed during
-   install" (old + new) and `navigator.storage.estimate()` as an estimate
-   only (review #24). Any write/quota error during import → delete staging,
-   keep the active database, error "Not enough storage space."
-
-**Restart recovery.** On worker start: every file in the pool that is not
-the active file and not listed in `pendingDeletes` is a leftover staging
-file → deleted. A crash at any point therefore leaves either the old
-installation or the new one active, never a half file.
-
-### 4.6 Same release, update check, uninstall
-
-- Installing the release that is already active and verified → no-op
-  ("Already installed"). "Repair" re-downloads into a new staging file.
-- Update check: when the owner page opens, at most once per 24 h, fetch the
-  pointer. Newer supported release → banner "New LCSH data available
-  (release X)" with a link to its `CHANGES.md` (pinned URL). Never
+- Same profile/release/digest/fingerprint as the active record → "Already
+  installed" (no download). "Repair" downloads into a new staging file and
+  commits like an update.
+- Update check: when the owner page opens, at most once per 24 h
+  (`localDbUpdateCheck`), fetch the pointer. A newer supported release →
+  banner "New LCSH data available (release X)" with a link to its
+  `CHANGES.md` (built from `release_commit` and the release path). Never
   auto-download.
-- Uninstall: close the handle, delete the file, clear `localDb`, set
-  `lookupBackend` to `loc-api`.
+- Profile switch (core ↔ full) = install of the other profile; the old
+  profile's file is retired at the commit.
 
-## 5. Row → Candidate mapping (one mapper)
+### 4.7 Uninstall
 
-For an `auth` row `{uri: localId, authority, label, deprecated, marc_key}`:
-`{cid: authority + ':' + localId, authority, localId, uri:
-'http://id.loc.gov/authorities/' + SEGMENT[authority] + '/' + localId,
+1. Refuse if another mutation runs. Gate queries; close the active handle.
+2. Bridge commit: `expected` = current record, `next` = `{localDb: null,
+   lookupBackend: 'loc-api', localDbPendingDeletes: [...current, file]}`.
+3. Write failed/refused → reopen the old file read-only, ungate, report; the
+   installation stays.
+4. Delete the file; on success remove it from `localDbPendingDeletes`. The UI
+   distinguishes "Uninstalled" from "Uninstalled; cleanup pending".
+
+## 5. Row → Candidate mapping (`localDb.js`, one mapper)
+
+An `auth` row `{uri: localId, authority, label, deprecated, marc_key}` maps to
+`{cid: authority + ':' + localId, authority, localId,
+uri: 'http://id.loc.gov/authorities/' + SEGMENT[authority] + '/' + localId,
 label, marcKey: marc_key, rdfTypes: [], matchClass, source: 'local-db',
-via}` with `SEGMENT = {lcsh: 'subjects', lcgft: 'genreForms', lcnaf:
-'names'}`. `via` ∈ `'label' | 'variant' | 'replacement'` (display only).
-`types.js` `isCandidate` accepts `source` `'loc-api' | 'local-db'`. A row
-whose `marc_key` starts with `18` is never a candidate (defensive; the
-builder excludes them).
+via, replacementFrom}` with `SEGMENT = {lcsh: 'subjects', lcgft: 'genreForms',
+lcnaf: 'names'}`.
+- `via` ∈ `'label' | 'variant' | 'replacement'` (display only).
+- `replacementFrom`: for `via: 'replacement'`, `[{authority, localId,
+  label}]` of the deprecated row(s) it replaces; otherwise absent.
+- A deprecated row, or a row whose `marc_key` starts with `18`, is REJECTED
+  by the mapper (counted in `rejectedHits`). Only mapped rows count as
+  accepted candidates anywhere in §6.
+- Unresolved replacement note (not a candidate): `{fromAuthority,
+  fromLocalId, fromLabel, targetAuthority, targetLocalId, reason:
+  'not-in-database' | 'deprecated-target'}`.
 
-## 6. The `local-db` backend (`lookup/localDb.js`)
+## 6. Lookup
 
-`lookup(suggestion, {limit, signal})` returns the SPEC-P4 LookupResult shape.
-`toSearch()` and `keywordText()` are reused from P4.
+### 6.1 One stage coordinator (`lookup/coordinator.js`)
 
-### 6.1 Stages (mirror P4 §4.2)
+P4's staged search (SPEC-P4 §4.2) becomes a coordinator that sends each
+(authority, query) to the backend that holds that authority:
+- `loc-api` setting: every authority → LOC (behavior identical to P4; the
+  P4 request-sequence tests must pass unchanged).
+- `local-db` with `full`: every authority → local.
+- `local-db` with `core`: `lcsh`, `lcgft` → local; `lcnaf` → LOC.
 
-Routing (P4 table) is filtered to the authorities in the installed profile;
-the rest go to §6.4.
-- **L1** full heading: Q1 then Q2 with `NORMALIZE_V1(full)` over the routed
-  local authorities. If any accepted candidate is `exact-full` → stop.
-- **L2** main heading (only if it differs): Q1 + Q2 with the main heading.
-  Stop on `exact-full`.
-- If any `exact-*` candidate exists → stop.
-- **L3** full-text: Q3a then Q3b with the MATCH string of `full`
-  (SCHEMA_QUERIES). Q3a rows first, then Q3b rows not already listed.
-- **L4** (kind `name` or `unknown`, and L3 gave zero rows): Q3a + Q3b with
-  the main heading.
+Rules (the ORIGINAL P4 `ROUTING` order is kept):
+- **Stage 1** (full heading), **Stage 2** (main heading, if different): for
+  every routed authority run the stage's search on its backend — local: Q1
+  then Q2 with `NORMALIZE_V1(text)`; LOC: suggest2 leftanchored. ALL parts of
+  the stage finish before the pooled stop condition is checked (any accepted
+  `exact-full` → stop; after stage 2, any accepted `exact-*` → stop).
+  Deprecated hits in these stages add their Q4 replacements (§6.2).
+- **Stage 3**: the FIRST routed authority only, on its backend — local: Q3a
+  then Q3b rows not already listed (MATCH string of the full heading); LOC:
+  suggest2 keyword.
+- **Stage 4**: only if stage 3 ran successfully with ZERO accepted
+  candidates and the kind is `name` or `unknown`: LCNAF only, on its backend
+  (local Q3a + Q3b with the main heading, or LOC keyword).
+- All candidates are ranked together by P4 `rankCandidates` with the
+  original authority index, stage and row/hit index, then cut to `limit`.
 
-### 6.2 Deprecated rows
+The LOC side uses an authority-scoped helper extracted from `locApi.js` that
+keeps the page scheduler and the per-run validated-response cache. All
+branches share the lookup step's ONE signal (P4 budget: 120 s per step) and
+the Retry `bypassCache`. There is no second budget.
 
-A deprecated row is never a candidate. For each deprecated row hit in L1–L2,
-Q4 gives its replacements; each replacement row that exists in this database
-and is not deprecated becomes a candidate with `via: 'replacement'` (one hop
-here; the UI shows "replaces the old heading <label>"). A replacement not in
-this database (e.g. an LCNAF target in `core`) is listed as a note, not a
-candidate.
+**Retrieval difference (documented, not a bug):** local stages 1–2 use
+exact preferred/variant lookups where LOC uses left-anchored suggest2, and
+local stage 3 uses bounded FTS. Candidate sets can therefore differ from the
+online ones; prefix-class candidates (e.g. `Japan--History--20th century`)
+come from FTS in stage 3.
 
-### 6.3 Ranking and outcome
+### 6.2 Deprecated rows (one hop)
 
-All candidates go through P4 `rankCandidates` (class by `matchClassOf` on the
-candidate's preferred label; dedupe by `cid`; best class kept; the
-authority order, then stage order, then row order as tie-breakers), then the
-limit. A variant match therefore usually ranks as `keyword` unless its
-preferred label also matches. Outcomes: `found`, `no-results`; a worker/SQL
-error → `failed` with `errorKind: 'local_db'`.
+For a deprecated row hit in stages 1–2: Q4 gives its replacements. Each
+target that exists in this database, is not deprecated and passes the mapper
+becomes a candidate with `via: 'replacement'` and `replacementFrom`; its
+match class is computed on ITS OWN preferred label. A target not in this
+database → note `not-in-database`; a deprecated target → note
+`deprecated-target` (no further hops). Notes are shown in the Matches step.
 
-### 6.4 Hybrid routing (`lookup/hybrid.js`)
+### 6.3 Classes and the exact-only fallback
 
-With `core`, a suggestion routed to `lcnaf` (kinds `name`, `geographic`,
-`unknown`) also needs names. The hybrid backend runs the local stages for
-local authorities and, in parallel, the P4 LOC API stages restricted to the
-non-local authorities (same scheduler, cache and budget). Candidates are
-pooled and ranked together; `requests` lists both. If the LOC part fails,
-the outcome is `partial` (local candidates exist) or `failed`, with the LOC
-error kind. Offline and only local authorities routed → no network at all.
+Match classes stay P4's (`matchClassOf` on the candidate's preferred label).
+A variant match (Q2) is usually `keyword` unless its preferred label also
+matches; `via: 'variant'` only explains it. P4's exact-only fallback (a
+unique `exact-full`) and subdivision bookkeeping are unchanged. Model
+subdivisions are never appended to authority MARC.
 
-## 7. Name MARC keys online (`pipeline/nameKeys.js`)
+### 6.4 Backend return shape
 
-Before recommendations are built, every chosen candidate with
-`source: 'local-db'`, `authority: 'lcnaf'` and `marcKey: null` gets one LOC
-request: suggest2 on the names endpoint with `q` = the label,
-`searchtype=leftanchored`, through the P4 scheduler. The hit whose `uri`
-equals the candidate's `uri` and passes `hit.js` validation supplies
-`marcKey` (the candidate object is copied; `marcKeySource: 'loc-api'`).
-No matching hit or a network error → the MARC step gives `unavailable` with
-reason `'MARC not available offline'` (a new P4 reason string). This step is
-skipped when the user is offline (`navigator.onLine === false`).
+`lookup(suggestion, {limit, signal, bypassCache})` returns P4's raw shape
+`{suggestionId, candidates, failures, incomplete, rejectedHits, requests}`.
+`runLookupStep()` keeps building the outcome. Rules:
+- Candidates from completed parts survive a later failure.
+- A failed part adds its error kind to `failures` (local parts:
+  `local_db`, a new kind in `types.js` and `pipelineText.js`: "The local
+  database could not answer this search").
+- `requests` lists LOC URLs and local entries `local:<query>:<authority>`.
+- Budget expiry → `incomplete: true` (→ `partial`/`failed` with `timeout`);
+  caller cancellation commits nothing (P4 rule).
+- Local RPC cancellation settles the promise at once, drops queued local
+  work, and ignores late replies. A running SQL statement may finish.
+- Offline with an LOC part required → that part fails → `partial` if other
+  candidates exist, else `failed`. A stage legitimately skipped by the stop
+  rule is not a failure.
+
+### 6.5 Installation identity per lookup
+
+Each lookup attempt captures `{backend, profile, release, releaseCommit,
+file}` (the generation). Every local query carries it; the worker answers a
+query for a generation that is no longer active with `db_generation_changed`
+(→ a `local_db` failure for that part), never with rows from the new file.
+Completed results keep their provenance.
+
+## 7. Name MARC keys (`pipeline/nameKeys.js`)
+
+**Scope:** effective choices (AI, exact, manual and additional picks) whose
+candidate has `source: 'local-db'`, `authority: 'lcnaf'`, `marcKey: null`.
+
+**Operation:** one name-key operation per recommendations build, with its own
+revision and AbortController. It resolves the DISTINCT cids needing a key:
+- Request: `buildSearchUrl('lcnaf', label, 'leftanchored')` (P4's bounded
+  count) through the P4 page scheduler and the run's validated-response
+  cache.
+- Result per cid:
+  - offline (`navigator.onLine === false`) → reason `'MARC not available
+    offline'` (no request);
+  - request failed → reason `'Name MARC-key lookup failed'` + the error kind;
+  - validated response without a hit whose `uri` equals the candidate's
+    `uri` → `'No matching name returned by this search'`;
+  - several matching hits with different keys → `'Name MARC-key lookup
+    failed'` (conflict; nothing chosen);
+  - matching hit with no key → the existing `'no key'`;
+  - otherwise the key is attached to a COPY of the candidate (`marcKey`,
+    `marcKeySource: 'loc-api'`); label and identity are unchanged, and
+    `buildMarc()` still checks the key's folded label against the
+    candidate's label (existing P4 reasons apply).
+- One 120 s deadline for the whole operation (queue waits and retries
+  included).
+- Commit only if the run id, the operation revision, the lookup revisions it
+  depends on, and the effective choices are all still current.
+- A new run, a relevant lookup retry, a changed choice or disposal aborts
+  and invalidates it.
+- Already resolved keys are kept (per run, by cid) and reused when
+  recommendations are regenerated; a newly chosen unresolved name starts a
+  new operation.
+- A failure leaves the recommendation in place with MARC unavailable and its
+  reason; the Recommendations step has "Retry name MARC keys".
 
 ## 8. UI
 
 Settings → "Lookup source":
-- "Library of Congress (online)" (default).
-- "Local database" with the installed profile, release, size and date, or
-  "Not installed".
-- Install panel: "Core — subjects and genres (about 62 MB download, 205 MB on
-  disk). Names are looked up online." [Download]; an "Advanced" disclosure
-  with "Full — also 12 million names (about 1.9 GB download, 5.4 GB on
-  disk)". Sizes come from the pointer, not constants.
-- During install: progress bar, bytes, Cancel, "Keep this tab open".
+- "Library of Congress (online)" (default) / "Local database".
+- Installed: profile, release, database size, install date; Repair,
+  Uninstall; states `repair-needed`, `recovery-unavailable`, "cleanup
+  pending", "open in another tab".
+- Install panel: "Core — subjects and genres (download X, disk Y). Names are
+  looked up online." [Download]; "Advanced" disclosure: "Full — also 12
+  million names (download X, disk Y)". Values from the pointer.
+- During install: progress, bytes, Cancel (disabled after the commit point:
+  "Finishing install…"), "Keep this tab open".
 - Errors from §4 in plain words, each with "Try again".
-- Update banner (§4.6), Repair, Uninstall.
-- The Matches step shows the source of each candidate list ("Local database
-  (release X)" / "Library of Congress online"). A `via: 'variant'` candidate
-  shows "matched a variant name"; `via: 'replacement'` shows the replaced
-  heading.
+- Update banner (§4.6).
+- Matches step: the source per candidate list ("Local database (release
+  X)", "Library of Congress online", or both for mixed routing);
+  `via: 'variant'` → "matched a variant name"; `via: 'replacement'` →
+  "replaces the old heading <label>"; unresolved replacement notes.
 
 ## 9. History and exports
 
-`lookup.backend` records `'local-db'` plus `{profile, release}`, or
-`'hybrid'` with both parts. Candidate `source` is stored per candidate (P4
-allowlist already has it). CSV/Copy all unchanged; the MARC reason string of
-§7 appears where it applies.
+- History records per lookup result the §6.5 provenance (`backend`,
+  `profile`, `release`) and per candidate `source`, `via`,
+  `replacementFrom`; per recommendation `marcKeySource`. `history.js`
+  building AND rebuilding (the allowlist) are extended; old entries still
+  read as `loc-api`. History never reads the current installation.
+- CSV gains a `marc_reason` column (empty when MARC is available). Copy all
+  already prints the reason.
 
-## 10. Manifest and permissions
+## 10. Manifest, CSP, privacy
 
-- Add `"unlimitedStorage"` to `permissions` (the database; review #24). No
-  new host permissions (§4.3 probe). `content_security_policy.extension_pages`
-  must allow `'wasm-unsafe-eval'` for the packaged wasm (valid in MV3).
-- The privacy policy and Store listing gain: "Optional: downloads a database
-  from Hugging Face (huggingface.co and its CDN); no personal data is sent."
+- `permissions` += `"unlimitedStorage"` (eviction protection for the
+  database; it does not create disk space). No new host permissions.
+- `content_security_policy.extension_pages`:
+  `"script-src 'self' 'wasm-unsafe-eval'; object-src 'self';"`. All JS and
+  wasm are packaged; no remote script sources.
+- HF requests: `credentials: 'omit'`, `referrerPolicy: 'no-referrer'`.
+- Privacy policy / Store text: "Database downloads do not include entered
+  bibliographic text or headings. Hugging Face and its CDN receive ordinary
+  connection metadata. With the core database, name searches use the Library
+  of Congress online; with the full database, resolving chosen names' MARC
+  keys also uses the Library of Congress online."
 
 ## 11. Performance targets (checked live, §13)
 
 Native SQLite on the builder's real `full` database (lead, 2026-09-27):
 Q1/Q2 0.1 ms; Q3a "john" (162,048 FTS matches) 280 ms, Q3b "john" 226 ms,
-"united states" 201 ms, "history" 70 ms, "smith john" 12 ms. wasm is
-expected to be 2–3× slower. Targets, measured in Chrome with `full`: every
-Q1/Q2 < 20 ms; Q3a or Q3b < 1 s even for the most common single words;
-one suggestion's whole local lookup < 2 s; worker start (wasm load + VFS +
-open) < 3 s. A miss is reported with numbers before any design change.
+"united states" 201 ms, "history" 70 ms, "smith john" 12 ms. The wasm factor
+is an ESTIMATE (2–3×); only browser measurement counts. Targets in Chrome
+with `full`: Q1/Q2 < 20 ms; Q3a or Q3b < 1 s for the most common single
+words; one suggestion's whole local lookup < 2 s; worker start (wasm + VFS +
+open + §3.4 recovery) < 3 s; stored-byte check (§4.5 step 2) reported with
+its time. A miss is reported with numbers before any design change.
 
 ## 12. Tests (vitest, Node)
 
-The lead supplies `src/services/localdb/__fixtures__/fixture_core.db` and
-`fixture_full.db`, built by the builder from its real fixtures (lead-owned).
-Node runs `@sqlite.org/sqlite-wasm` in memory (no OPFS).
-1. `sql.js` text equals SCHEMA_QUERIES.md (the lead supplies a sha256 of each
-   query block; the test pins it).
-2. MATCH builder: the SCHEMA_QUERIES rules incl. no-token input.
-3. Every builder golden whose records are in the fixtures, through
-   `localDb.js`'s query layer (the lead supplies the selected list).
-4. Stages L1–L4, deprecated → replacement, variant, `core` vs `full`
-   routing, ranking reuse, outcomes.
-5. Hybrid: local + mocked LOC parts, partial/failed, offline.
-6. Pointer validation: every field and each rejection message; numeric
-   release order.
-7. Install state machine with a fake importer: first-chunk coalescing (1-,
-   7-, 15-, 511-byte leading chunks), empty chunks, truncated gzip, hash and
-   size mismatch, cancel during stream, quota error, same-release no-op,
-   staging names, restart cleanup, `pendingDeletes`.
-8. SHA-256: NIST vectors + random buffers vs `crypto.subtle`.
-9. Ownership: lock not available → fallback UI state; worker crash → reject
-   pending, one re-create, second crash → `loc-api`.
-10. Name keys: match by uri, validation, offline skip, the new reason.
-11. Honesty: render the Matches/Recommendations steps with `local-db`
-   candidates; IDs/links only from rows.
+Pinned: Node 24 (the repo's current), `@sqlite.org/sqlite-wasm`
+3.53.4-build1 in memory (no OPFS). The lead supplies
+`localdb/__fixtures__/fixture_core.db` and `fixture_full.db` (built by the
+builder from its real fixtures) and a list of the builder goldens that apply
+to them.
+1. `sql.js` query text: pinned sha256 per query block (lead-supplied).
+2. MATCH builder incl. no-token input.
+3. The selected builder goldens through `localDb.js`'s query layer.
+4. Mapper: deprecated/18X rejection, `via`, `replacementFrom`, notes.
+5. Coordinator: the exact request/query sequence for each P4 test case in
+   `loc-api` (unchanged), `local-db` full and `local-db` core; pooled stop
+   decisions; stage 3 on the first routed authority; stage 4 rules; ranking
+   with original indices; `partial`/`failed`; offline; `local_db` failure
+   keeps earlier candidates; cancellation; generation change.
+6. Pointer: every field, URL canonicalization attacks (dot segments,
+   `%2F`, query, fragment, credentials, other host), sizes (safe integers),
+   numeric release order.
+7. Install protocol with a fake pool/importer and a fake bridge:
+   first-chunk coalescing (1, 7, 15, 511-byte leading chunks), empty chunks,
+   truncated gzip, over-size abort, hash/size mismatch, **short write (stream
+   hashes pass, stored check fails)**, staging-name collision, one mutation
+   at a time, cancel before/at/after the commit point, commit refused /
+   failed / uncertain, switch and delete order (never delete an open or the
+   active file), `pendingDeletes`, same-release no-op, profile switch,
+   uninstall success/failure, §3.4 recovery incl. unreadable settings and a
+   missing active file.
+8. SHA-256 wrapper: NIST vectors, random chunk boundaries, a stream longer
+   than 2^32 bytes (generated, bounded memory) for length accounting.
+9. Ownership client: lock unavailable → fallback state; crash → reject
+   pending, one re-create, second crash → `loc-api`; bridge stale generation.
+10. Name keys: every §7 result case, cache reuse, deadline, staleness
+   (changed choice during the operation), Retry.
+11. History/CSV: provenance round-trip, `marc_reason`, old entries.
+12. Honesty (`react-dom/server`): Matches/Recommendations with `local-db`
+   and mixed candidates; IDs/links only from rows; variant/replacement
+   wording.
+Query-plan assertions stay in the builder's representative-data gate; the
+tiny fixtures test correctness only.
 
-## 13. Live acceptance (lead, Chrome)
+## 13. Live acceptance (lead, Chrome, production package)
 
-1. Install core; lookup of the two P4 records with `local-db`; results
-   compared with `loc-api` runs (same headings found where both have them).
-2. Install full (the real 1.9 GB file); names found offline; a chosen name
-   gets its MARC key online; offline → "MARC not available offline".
-3. Two app tabs: the second shows the "open in another tab" state and works
-   with online lookup.
-4. Kill the worker (DevTools) during a lookup and during install.
-5. Close the tab at each install boundary (streaming, verifying, activating)
-   and reopen: old or new installation active, no leftovers.
-6. Same-release install = no-op; Repair works.
-7. Corrupted download (proxy flips a byte) → rejected, old kept.
-8. Unsupported pointer (fingerprint not allowed) → message, old kept.
-9. Update banner with a newer release.
-10. §11 timings.
+1. Fresh profile, no optional grants: pointer + core download work (CORS).
+2. First install core; both P4 records with `local-db`; compared with
+   `loc-api`.
+3. Install full (the real 1.9 GB file); names offline; a chosen name's MARC
+   key online; offline → "MARC not available offline"; §11 timings; memory
+   stays bounded during install.
+4. Full → full repair; core ↔ full switch; uninstall.
+5. Injected faults (a test build flag): failure just before / just after the
+   commit write, after the switch, at each deletion; settings-write failure;
+   quota error; cancel during import and during the stored-byte check;
+   repeated Install clicks; uninstall during install.
+6. Close the tab at each install phase and reopen: the recorded
+   installation is active and valid, no leftovers after §3.4.
+7. Two app tabs; owner closes → the other tab's "Try again" takes over;
+   popup launches during an install; `#settings` navigation during an
+   install.
+8. Corrupted download (a proxy flips one byte) → rejected, old kept.
+9. Unsupported pointer → message, old kept. Update banner with a newer
+   release.
 
-## 14. Open questions for review
+## 14. Answers to the v1 open questions (from review)
 
-1. Streaming SHA-256: dependency or own code (§4.4)?
-2. Is skipping `PRAGMA quick_check` acceptable given both hashes are
-   verified?
-3. The hybrid backend runs LOC requests for names even when `full` is not
-   installed and the user chose `local-db`: is "partial" the right outcome
-   when offline?
-4. `via: 'variant'` candidates rank as `keyword`; should an exact variant
-   match get its own class (it would change P4's MATCH_CLASSES and the
-   exact-only fallback)?
+1. Streaming SHA-256: pinned `@noble/hashes` behind `sha256.js`.
+2. No `PRAGMA quick_check`: acceptable because the stored bytes are
+   verified (§4.5 step 2) and the builder runs structural gates.
+3. Offline mixed routing: `partial` with candidates, else `failed`.
+4. Variant matches keep P4's classes; `via` explains them.
 
 ## 15. Round-1 extension review findings → P5
 
 | # | Fix |
 |---|---|
-| 1 | §3 Web Lock owner, fallback UI, crash handling |
-| 2 | §4.3 worker-owned fetch + pull callback, 512-byte first chunk, cancel; §12 row 7 |
-| 20 | §4.1 pinned URLs from the pointer, both hashes verified (§4.5) |
-| 22 | §4.3 unique staging names; §4.5 activation order; §4.6 same-release no-op |
-| 23 | §4.1 version/fingerprint checks before download and §4.5 in the DB; §5 one mapper |
-| 24 | §4.5 space wording, estimate is only an estimate, quota errors keep the old DB; §10 `unlimitedStorage` |
-| 27 | SCHEMA_QUERIES Q3 (tokenizer, MATCH, ranking, dedupe) used as is |
-| 28 | builder §8.6 plan checks per query class; §12 uses fixtures |
-| 29 | NORMALIZE_V1 shared vectors (51, incl. Unicode-boundary cases) |
-| 30 | §12 unit gates vs §13 Chrome gates, listed separately |
+| 1 | §3.1 owner lock + one client per document; §4.1 one mutation at a time |
+| 2 | §4.4 worker-owned fetch, pull importer, 512-byte first chunk, cancel; §4.5 commit boundary |
+| 20 | §4.2 pinned, canonical URLs; §4.5 stream AND stored hashes |
+| 21 | §3.4 startup recovery; §4.5 commit point; §4.7 uninstall order |
+| 22 | §4.4 unique, collision-checked staging names; §4.6 identity-based no-op |
+| 23 | §4.2 versions/fingerprint before download; §4.5 selected-profile + `db_meta` checks; §5 one mapper |
+| 24 | §4.3 space wording; quota/IO errors keep the old DB; §10 `unlimitedStorage` |
+| 27 | SCHEMA_QUERIES Q3 as is; §6.1 stage 3 |
+| 28 | builder §8.6; §12 tail |
+| 29 | shared NORMALIZE_V1 vectors (51) |
+| 30 | §12 Node gates vs §13 Chrome gates |
+
+## 16. P5 review round 1 → v2
+
+| # | Fix |
+|---|---|
+| 1 | §4.1 one mutation + operationId; §4.4 collision-checked staging; §4.5 steps 4–9 (prepared handle, gated queries, compare-and-write commit point, no cancel after commit, switch/close/delete order); §3.1 lock order |
+| 2 | §4.5 step 3 stored-byte check through `sqlite_dbpage` (probed); §12 row 7 short-write test |
+| 3 | §3.4 recovery order, unreadable settings keep files, no promotion, idempotent deletes; §4.7 commit-then-delete uninstall |
+| 4 | §3.1 popup never owns; one module-level client; no unload dependency; takeover; §3.3 bridge |
+| 5 | §6.4 raw P4 shape; failures/partial; `local_db`; cancellation |
+| 6 | §6.1 one coordinator, original routing order, pooled stage decisions, extracted LOC helper, one budget; retrieval difference documented |
+| 7 | §5 mapper before counting; §6.1 stage 4 on accepted candidates; §6.2 replacement class on own label, `replacementFrom`, notes; §0/§6.1 limitations |
+| 8 | §7 request via `buildSearchUrl`, distinct result reasons, exact uri match, conflicts |
+| 9 | §7 operation with revision, deadline, commit conditions, invalidation, cache, Retry |
+| 10 | §4.2 canonical URL, safe integers, release date; §4.5 selected profile, `lh_format`, named objects; §2 pending deletes and update-check fields; identity-based no-op |
+| 11 | §6.5 per-lookup generation; §9 history build + rebuild, `marc_reason` |
+| 12 | §4.2/§4.4 fetch options; §10 CSP and privacy text; §13 row 1 fresh profile |
+| 13 | §12 pinned Node + package, added rows; §13 fault matrix |
+| 14 | §4.3 additional vs peak space, estimate wording; §1 `webpack.common.js`; §11 factor marked as estimate |
