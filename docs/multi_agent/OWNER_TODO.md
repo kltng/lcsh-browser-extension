@@ -29,13 +29,21 @@ answers permission prompts by itself.)
 
 ## 3. Before the first database release (Phase 2)
 
-- The Hugging Face dataset `kltng/lcsh-db-lite` does not exist yet. I will
-  create it with one initial commit when the builder is approved; tell me if
-  you would rather create it yourself.
-- The dataset needs a fine-grained HF token with write access to that dataset
-  only, stored as the GitHub secret `HF_TOKEN` in the new builder repo.
-- The builder repo `kltng/lcsh-db-builder` is still local only; I will push it
-  when the code is approved.
+Checked 2026-09-27:
+- **This Mac is logged in to Hugging Face as `kltng`** (a classic, not
+  fine-grained, token in `~/.cache/huggingface/token`). That is enough for me
+  to create the dataset and publish the first release from here, once the M1
+  benchmark passes. Say so if you would rather create and publish it
+  yourself.
+- **The build server has no Hugging Face credential at all** (no env
+  variable, no cached login). It does not need one unless you want the
+  weekly rebuild to run there instead of on GitHub.
+- **Still needed from you:** a FINE-GRAINED token with write access to
+  `kltng/lcsh-db-lite` only, to store as the GitHub secret `HF_TOKEN` in the
+  builder repo. The classic token on this Mac must not go into CI.
+- The builder repo `kltng/lcsh-db-builder` is still local only (it is
+  committed, and the code is approved). I will push it when you confirm the
+  repository name and that it should be public.
 
 ## 4. Chrome Web Store text (Phase 6, at release)
 
