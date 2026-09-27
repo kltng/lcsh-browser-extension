@@ -1,6 +1,6 @@
 # SPEC-P4 — JSON pipeline, lookup interface (LOC API), deterministic MARC
 
-Status: DRAFT v2 (for review round 2), 2026-09-27. v1 was REJECTED with 24
+Status: v3 = v2 + the 14 edits of review round 2 (APPROVE-WITH-CHANGES), 2026-09-27. v1 was REJECTED with 24
 findings (`.dispatch/spec-review-p4-1/last_message.md`; v1 archived at
 `.dispatch/SPEC-P4.v1.md`). §14 maps each finding to its fix.
 
@@ -97,7 +97,7 @@ Deleted after P4: `legacyBridge.js`; the markdown parts of `geminiService.js`
 
 ### 2.1 Identity normalization (`lookup/normalize.js`)
 
-This is used only for dedupe and for the `exact-*` match classes. It is
+This is used for dedupe and for all match classes in §4.4 (exact and prefix). It is
 normative in P4, and the P5 builder must match it. The version tag is
 `NORMALIZE_V1`, and its vectors live in
 `src/services/lookup/__fixtures__/normalize_vectors.json` (at least 40 cases,
@@ -137,7 +137,9 @@ of {heading: string 1..200, kind: enum [topical, geographic, name, genre],
 reason: string 0..300}}` (object root, all required, no extra keys).
 
 **Post-processing.** Ids are `s1..sN` in model order. Headings are trimmed;
-duplicates (by `normalizeLabel`) are merged, keeping the first.
+duplicates (by `normalizeLabel`) are merged, keeping the first. Suggestions
+whose normalized heading contains no Unicode letter or number are dropped; if
+none remain, suggestion generation fails with `invalid_output`.
 
 **Disclosed text fallback.** It runs only when `generate` throws
 `invalid_output`:
@@ -159,17 +161,23 @@ duplicates (by `normalizeLabel`) are merged, keeping the first.
   it.
 
 Every other ProviderError propagates (shown with Retry and Settings buttons).
-This fallback is a disclosed, recorded pipeline step; it is not an adapter
-downgrade, so SPEC-P3 §4.1 is unchanged.
+**Exception to SPEC-P3 §4.1:** P4 authorizes ONE disclosed pipeline-level
+text retry after `invalid_output`; P3's prohibition on adapter-level mode
+changes stays binding, and this sentence supersedes P3's "there is no
+downgrade anywhere" for this one case only. The 90 s budget covers the
+initial attempt and the fallback together.
 
 ## 4. Step 2 — lookup (`lookup/*`, `pipeline/lookupStep.js`)
 
 ### 4.1 Search input (`searchText.js`)
 
 `toSearch(heading)`:
-- NFC; collapse whitespace (the §2.1 set) to one space; turn `/\s*[–—]\s*/`
-  and `/\s*--\s*/` into `--`; trim; remove trailing `.`.
-- Empty or punctuation-only → the suggestion is `no-results` with no requests.
+- NFC; collapse whitespace (the §2.1 set) to one space; replace (GLOBAL flag)
+  `/\s*[\u2013\u2014]\s*/g` and `/\s*--\s*/g` with `--`; trim; remove ALL
+  trailing `.`; trim.
+- Empty or punctuation-only, OR splitting on `--` gives any empty (trimmed)
+  component (e.g. `--History`, `Cats--`) → the suggestion is `no-results`
+  with no requests.
 - `full` = that string. `main` = the text before the first `--` (the same
   string if there are no subdivisions). `keywordText(x)` = `x` with `--`
   replaced by a space.
@@ -187,8 +195,18 @@ Routing by kind:
 | genre | lcgft, lcsh |
 | unknown | lcsh, lcnaf, lcgft |
 
-The stages run in order and stop as soon as a stage yields an `exact-full`
-candidate:
+Stage rules:
+- ALL routed requests of a stage complete before its stop condition is
+  checked.
+- If any accepted `exact-full` candidate exists after a stage, the later
+  stages do not run.
+- S3 runs only when S1 and S2 produced no `exact-*` candidate.
+- S4 runs only when S3 RAN successfully and returned zero accepted candidates,
+  and the kind is `name` or `unknown`. S4 never follows a skipped S3.
+- Not keyword-searching after an `exact-main` is a bounded-recall policy:
+  ranking (§4.4) orders only what was actually searched.
+
+The stages:
 
 | Stage | Search | On |
 |---|---|---|
@@ -198,8 +216,16 @@ candidate:
 | S4 | only for kind `name`/`unknown` and if S3 found nothing: `keyword`, `q = keywordText(main)`, `count = 10` | lcnaf |
 
 Endpoints: `https://id.loc.gov/authorities/{subjects|names|genreForms}/suggest2`
-(lcsh | lcnaf | lcgft). Identical requests within one run are made once (a
-per-run cache keyed by URL).
+(lcsh | lcnaf | lcgft).
+
+**Per-run cache** (keyed by URL):
+- It stores SUCCESSFUL validated responses (the raw accepted hits, before
+  suggestion-specific match classes or truncation).
+- Identical in-flight requests are coalesced. Cancelling one consumer does
+  not cancel the shared request while another consumer is waiting.
+- Failed and cancelled entries are evicted.
+- An explicit user **Retry lookup** starts a fresh attempt that bypasses
+  completed cache entries for that suggestion's URLs.
 
 ### 4.3 Hit → Candidate (`hit.js`)
 
@@ -208,10 +234,17 @@ A hit is **accepted** only if all of these hold:
 - `token` is a non-empty string matching `^[a-z]{1,3}[0-9]+(-[0-9]+)?$`;
 - `uri` equals `http://id.loc.gov/authorities/<subjects|names|genreForms>/<token>`,
   with the path segment matching the authority that was searched;
-- `more.marcKeys`, if present, is an array of strings;
-- its tag (the first 3 characters of `marcKeys[0]`) does NOT start with `18`;
-- `more.collections` (if present) contains no entry ending in
-  `collection_Subdivisions`.
+- the hit is an object, and `aLabel` is not whitespace-only;
+- `more` is absent (treated as empty metadata) or an object; a present but
+  malformed `more` rejects the hit;
+- `more.marcKeys`, if present, is an array of strings; missing or empty →
+  `marcKey: null`; otherwise `marcKey = marcKeys[0]` (no rescue from later
+  keys);
+- when `marcKey` is not null, its tag (the first 3 characters) does NOT
+  start with `18`;
+- `more.collections`, if present, is an array of strings with no entry
+  ending in `collection_Subdivisions`;
+- `more.rdftypes`, if present, is an array of strings.
 
 Anything else is **rejected** and counted in `rejectedHits`, which is shown
 only in the debug counts, never with text. A response that is not JSON, or
@@ -258,8 +291,14 @@ Outcome:
   - if the wait is ≤ 20 s, pause the WHOLE queue (a shared cooldown) for that
     long, then retry the request, at most 2 times per request;
   - if the wait is > 20 s, fail the request with `rate_limit`.
-- The lookup step has a 120 s deadline that covers queue waits, cooldowns,
-  bodies and retries.
+- The lookup step has a 120 s WORK BUDGET that covers queue waits,
+  cooldowns, bodies and retries. Some stages may therefore not run. On
+  expiry: abort active work, drop queued work, and finalize every suggestion.
+  A suggestion that did not complete becomes `partial` (if it has
+  candidates) or `failed` (if not), with `errorKind: 'timeout'`. Completed
+  suggestions keep their outcome. Expiry is never reported as `cancelled`.
+- Overlapping cooldowns: `cooldownUntil = max(current, new)`. A past HTTP
+  date gives 0; an invalid `Retry-After` value gives the 4 s default.
 - The caller's signal cancels active AND queued work.
 - Tabs do not share the budget. This limitation is documented; P4 accepts it.
 
@@ -283,13 +322,15 @@ Outcome:
   - `additional[].choice` must be a presented id whose cid was not chosen by
     any valid selection. Duplicates are removed by cid; at most 3 are kept.
   - Everything else is discarded; its count is logged as `invalid_selection`.
+- When no suggestion has any presented candidate, selection makes NO provider
+  call and moves straight to `selected`.
 
 ### 5.2 When the AI step fails
 
 | ProviderError kind | Behavior |
 |---|---|
-| `invalid_output`, `truncated`, `too_long` (after §10's retry) | AUTOMATIC exact-only fallback (§5.3) for every presented suggestion. Banner: "The AI could not choose; only exact matches were kept." |
-| any other kind (`auth`, `permission`, `billing`, `not_configured`, `forbidden`, `network`, `timeout`, `rate_limit`, `server`, `overloaded`, `refused`, `unavailable`) | The step STOPS with the error message and three buttons: Retry, Settings, and "Continue without AI (exact matches only)". The last one applies §5.3, with the banner. |
+| `invalid_output`, `truncated`, `too_long` (Nano: after §10's retry; cloud `too_long` goes straight here) | AUTOMATIC exact-only fallback (§5.3) for every presented suggestion. Banner: "The AI could not choose; only exact matches were kept." |
+| any other kind (illustrative: `auth`, `permission`, `billing`, `not_configured`, `forbidden`, `bad_request`, `images_unsupported`, `network`, `timeout`, `rate_limit`, `server`, `overloaded`, `refused`, `unavailable`; implemented as the fallback branch after `cancelled` and the three automatic kinds) | The step STOPS with the error message and three buttons: Retry, Settings, and "Continue without AI (exact matches only)". The last one applies §5.3, with the banner. |
 | `cancelled` | Nothing changes. |
 
 ### 5.3 Exact-only fallback
@@ -304,7 +345,8 @@ Outcome:
 
 - In the Matches screen, every suggestion with candidates offers "Use this
   heading" on each candidate, and "Use none". That gives `method:'manual'`,
-  `confidence:null`.
+  `confidence:null`; "Use none" gives `cid:null`, `noneReason:'manual-none'`
+  (shown as "You chose none").
 - Manual choices override the AI or exact choice for that suggestion, and are
   kept until the run is invalidated (§9).
 - `lexicalSimilarity` = `round(100 * (1 - lev(n(label), n(heading)) /
@@ -313,10 +355,12 @@ Outcome:
 
 ### 5.5 Outcome bookkeeping
 
-- `mainHeadingOnly` is true when the chosen candidate's class is
-  `exact-main` or `prefix-main` and the suggestion had subdivisions.
-  `droppedSubdivisions` holds the suggestion's subdivisions that are not in the
-  chosen label.
+- Subdivisions are compared as ORDERED normalized components (split on `--`,
+  `normalizeLabel` per component), independent of the match class.
+  `droppedSubdivisions` = the suggestion's subdivision components (after the
+  main heading) that do not appear, in order, in the chosen label's
+  components. `mainHeadingOnly` = the chosen label has NO subdivisions and its
+  normalized label equals the suggestion's normalized main heading.
 - `noneReason`:
 
   | Situation | noneReason |
@@ -326,13 +370,16 @@ Outcome:
   | the AI chose `"none"` | `ai-chose-none` |
   | the fallback found no unique exact candidate | `ai-unavailable` |
   | no valid selection for a presented suggestion | `not-chosen` |
+  | the cataloger chose "Use none" | `manual-none` |
 
 ### 5.6 Recommendations
 
 - One Recommendation per distinct cid, in suggestion order, then additional
   order. `selections` lists every selection that chose that cid.
-- Additional AI picks appear with `suggestionId: null`, `method:'ai'` and
-  their confidence.
+- Additional AI picks appear with `suggestionId: null`, `method:'ai'`, their
+  confidence and `lexicalSimilarity: null` (no source suggestion is
+  invented). Additional picks are deduplicated by cid against the FINAL
+  merged regular and manual choices; a duplicate is dropped.
 
 ## 6. Step 4 — MARC (`marc.js`)
 
@@ -341,11 +388,13 @@ failed step:
 1. `marcKey` is missing → `'no key'`.
 2. Parse. The key must match `^(\d{3})(.)(.)\$` → tag, `a1`, `a2`, and the
    remainder starts at the first `$`. Split the remainder with
-   `/\$([a-z0-9])/`. Each subfield value must be non-empty. The first subfield
-   must be `a` (for tags 100/110/111/130/150/151/155). A failure →
+   `/\$([a-z0-9])/`. Each subfield value must be non-empty and must NOT contain
+   a `$` (a residual `$` → `'unparseable key'`). The first subfield must be
+   `a` (for tags 100/110/111/130/150/151/155). Any failure →
    `'unparseable key'`.
-3. **Consistency check.** Join the values: `$a` first, then `x y z v` joined
-   with `--`, every other code joined with a single space. The result must
+3. **Consistency check.** An ordered fold over the subfields as parsed (never
+   reordered): start with the first subfield's value; append each next value
+   with `--` if its code is `x`, `y`, `z` or `v`, else with a single space. The result must
    equal the candidate `label` exactly. Otherwise → `'key does not match
    label'`. This check also catches a literal `$` inside a value. Verified
    15/15 on live samples (evidence addendum).
@@ -355,8 +404,9 @@ failed step:
 
    | Bib tag | ind1 | ind2 | Also |
    |---|---|---|---|
-   | 600, 610, 611 | `a1` (must be a digit, else `'bad indicator'`) | `0` | |
-   | 630 | `a2` (must be a digit, else `'bad indicator'`) | `0` | |
+   | 600 | `a1`, must be `0`, `1` or `3` (else `'bad indicator'`) | `0` | |
+   | 610, 611 | `a1`, must be `0`, `1` or `2` (else `'bad indicator'`) | `0` | |
+   | 630 | `a2`, must be a digit `0`–`9` (else `'bad indicator'`) | `0` | |
    | 650, 651 | blank | `0` | |
    | 655 | blank | `7` | append `['2','lcgft']` |
 
@@ -369,8 +419,10 @@ The UI and exports call this a "MARC field (text form)", not a MARC record.
 
 Golden fixtures: `src/services/pipeline/__fixtures__/marc_golden.json`,
 written by the LEAD from the evidence tables (every row, including 111, 130
-and NameTitle), plus adversarial keys (literal `$` in a value, empty `$a`,
-missing `$`, 18X, unknown tag, a non-digit indicator, a label mismatch). The
+and NameTitle), plus adversarial keys (literal `$` in a value — both the
+`$100` and the residual `Total $ value` forms, empty `$a`, missing `$`, 18X,
+unknown tag, a non-digit indicator, an out-of-set 600 indicator `1009`, a
+label mismatch) and a synthetic `130 4$aThe example` → `630 40 $a The example`. The
 coder must not edit this file.
 
 ## 7. UI
@@ -399,8 +451,10 @@ coder must not edit this file.
 - the current choice with its method: "AI choice (confidence 85)", "Exact
   match", "Your choice", or "None — <reason in words>";
 - the "Use this heading" / "Use none" controls;
-- the main-heading note when it applies: "Only the main heading was found;
-  these subdivisions were not: … (add them yourself if needed)".
+- when `droppedSubdivisions` is not empty: "The selected heading does not
+  include these suggested subdivisions: …". The same note is carried to the
+  recommendation card, Copy all (as a comment line) and the CSV
+  `subdivision_note` column.
 
 The AI step runs on "Choose headings". Its failure UI follows §5.2. Then
 "Build recommendations".
@@ -420,7 +474,9 @@ recommendations.
   and a header line says "Headings from id.loc.gov; MARC fields generated
   from LC authority keys".
 - CSV: the columns `label, lc_id, uri, authority, marc_field, marc_status,
-  methods, confidence, source`, built with `utils/csv.js`. That module KEEPS
+  methods, confidence, subdivision_note, source` (`methods` and `confidence`
+  are JSON arrays aligned with the recommendation's `selections` order,
+  nulls kept, e.g. `["ai","manual"]` and `[85,null]`), built with `utils/csv.js`. That module KEEPS
   the existing formula guard (a leading `= + - @`, tab or CR is prefixed with
   `'`), applies RFC 4180 quoting, adds a UTF-8 BOM, and uses CRLF.
 
@@ -442,7 +498,14 @@ and clear.
   "Saved" only then, and an error otherwise.
 - `onChanged` refreshes the list in other tabs.
 - Images are stripped from a COPY; the live form data is not mutated.
-- The cap stays at 25 entries (the oldest are dropped).
+- Size policy (product policy, not a browser quota claim): one serialized v2
+  entry (UTF-8) may be at most 256 KiB, otherwise the save is refused with a
+  local message; the history keeps at most 25 entries AND 6 MiB serialized,
+  evicting the oldest inside the lock. Eviction and insertion are ONE write;
+  on failure the previous stored history stays as it was and the UI reports
+  the failure. Saved evidence is never silently truncated.
+- On load, nested objects are rebuilt field by field (allowlist); a
+  candidate's omitted `source` is taken from `lookup.backend`.
 
 **v2 entry** (built by an allowlisting builder; nothing is spread from config
 or responses):
@@ -484,6 +547,16 @@ each AI step STARTS.
 - Retrying the AI step clears the AI selections but keeps manual choices.
 - Each step owns an AbortController, aborted on a new run, on
   unmount, and on leaving the step. Its cleanup is in `finally`.
+- **Operation revisions.** Each lookup (per suggestion) and the selection
+  step have a monotonically increasing revision. A result is committed ONLY if
+  its `runId` AND its revision are still current. Leaving a step invalidates
+  its pending operation even when the run stays current.
+- A per-suggestion lookup retry invalidates that suggestion's choice,
+  INCLUDING a manual choice.
+- When AI results are merged, existing manual choices (including a manual
+  "none") win and are kept.
+- Any change of an effective choice or of a candidate list invalidates the
+  built recommendations; they are regenerated from the current selections.
 
 ## 10. Budgets (`budget.js`)
 
@@ -512,11 +585,26 @@ each AI step STARTS.
   rate (gold subdivided headings where only their main heading was
   recommended), and per-language results.
 - **Variants.** `SUGGESTION_COUNT_HINT` = "3 to 6" vs "up to 8".
-- **Decision rule, fixed before running.** Keep the variant with the higher
-  exact F1; if the difference is within the paired bootstrap 95% interval,
-  keep "3 to 6". Accept P4 only if the kept variant's exact F1 is not worse
-  than the baseline (Gemini-2.5-flash + exact validation, experiment 1:
-  0.182) by more than 0.03.
+- **Decision rule, fixed before running.** Let `Δ = exact micro-F1("up to
+  8") − exact micro-F1("3 to 6")`. Choose "up to 8" only if the lower bound
+  of the paired 95% interval of Δ is above 0; otherwise choose "3 to 6".
+- **Acceptance:** the kept variant's exact micro-F1 must be ≥ 0.152. This is
+  an absolute quality floor, not a same-sample nonregression claim (the 0.182
+  of experiment 1 came from a different 40-record sample).
+- **Statistics:** 10,000 paired record-level bootstrap resamples, seed
+  20260927, percentile intervals, with the aggregate micro-F1 recomputed in
+  each resample.
+- **Pins:** the scorer is `lcsh-benchmark-score` at lcsh-benchmark commit
+  `ce81a9c` (`uv run lcsh-benchmark-score --dataset <subset> --submission
+  <file>`); gold = `ground_truth_lcsh_merged`; a record with no
+  recommendation counts as an empty prediction. The LOC cache is FROZEN
+  before the scored replay; if any request is still unresolved, the gate is
+  INCOMPLETE (not a quality result). The suggestion AND selection model
+  settings are recorded.
+- **Subdivision loss:** numerator = gold subdivided headings whose exact
+  heading was not recommended but whose main heading was; denominator = gold
+  subdivided headings. When both the full and the root heading are
+  recommended, it is not a loss.
 - **Small model.** One run of the kept variant with `qwen/qwen3.8-flash`
   (small, cheap) on the same sample, reported only. The Nano check stays the
   owner's deferred release gate.
@@ -531,14 +619,14 @@ each AI step STARTS.
 | 2 | searchText | dash and space forms of the same heading give the same `full`/`main`; empty/punctuation-only → no requests |
 | 3 | suggest | JSON path; ids/dedupe; prompt static check (§3); text fallback: parser bounds (fence, numbering, bold, > 200 chars, > 8 lines, zero lines → error), `suggestMode` recorded; non-invalid_output errors propagate |
 | 4 | hit.js | every accept/reject rule, incl. 180/181, the Subdivisions collection, a bad token, a URI mismatch, non-array marcKeys, a non-JSON body |
-| 5 | locApi stages | the exact request list for: a simple topical; a subdivided geographic with no record whose main heading exists only in LCNAF (`Kyoto (Japan)--Intellectual life--21st century` → S1 nothing, S2 finds `n80024170` `Kyoto (Japan)` as `exact-main`; LCSH `181` hits for `Kyoto (Japan)` are rejected); a subdivided heading that exists in LCSH (`Japan--History` → S1 `exact-full` `sh85069426`, early stop); a name (S4); unknown; early stop on `exact-full`; the per-run cache |
+| 5 | locApi stages (incl. §4.2 stage rules: S4 never after a skipped S3) | the exact request list for: a simple topical; a subdivided geographic with no record whose main heading exists only in LCNAF (`Kyoto (Japan)--Intellectual life--21st century` → S1 nothing, S2 finds `n80024170` `Kyoto (Japan)` as `exact-main`; LCSH `181` hits for `Kyoto (Japan)` are rejected); a subdivided heading that exists in LCSH (`Japan--History` → S1 `exact-full` `sh85069426`, early stop); a name (S4); unknown; early stop on `exact-full`; the per-run cache |
 | 6 | ranking | rank-before-limit (an exact hit from the 2nd authority survives 10 weak hits from the 1st); the best class kept on dedupe |
 | 7 | outcomes | found / partial / no-results / failed with errorKind |
-| 8 | scheduler | ≤ 2 in flight; ≥ 500 ms spacing; shared cooldown on 429; Retry-After seconds, date, > 20 s; timeout; the deadline covers the queue; cancel active + queued |
+| 8 | scheduler | ≤ 2 in flight; ≥ 500 ms spacing; shared cooldown on 429 with `max()` overlap; Retry-After seconds, past date, invalid, > 20 s; timeout; budget expiry finalizes partial/failed with `timeout` (not cancelled); cancel active + queued; cache: success stored, failures evicted, coalescing, Retry bypasses |
 | 9 | select | validation rules (cross-suggestion id, unknown id, duplicate suggestionId, additional dedupe by cid and cap); the §5.2 table per error kind; exact-only fallback with a unique vs an ambiguous exact; manual override; `noneReason` per case; mainHeadingOnly + droppedSubdivisions; aggregation by cid |
 | 10 | budget | Nano trims; the `too_long` retry with new ids validated against the new snapshot |
-| 11 | marc | every golden row → exact output; every adversarial key → `unavailable` with the right reason |
-| 12 | run.js | a stale runId is dropped; per-suggestion retry invalidation; a new suggest clears downstream; abort on unmount |
+| 11 | marc | every golden row → exact output (incl. the synthetic `130 4`); every adversarial key → `unavailable` with the right reason (incl. `Total $ value` and `1009`) |
+| 12 | run.js | a stale runId is dropped; same-run late lookup and late AI results (older revision) are dropped; a manual choice made during AI selection survives the AI result; per-suggestion retry clears that suggestion's manual choice; a choice change regenerates recommendations; a new suggest clears downstream; abort on unmount |
 | 13 | history | locked RMW across two fake pages (no lost update, delete not resurrected); awaited save failure; allowlist (no key/config fields, recursive); re-render steps 2–4 from a v2 entry; legacy adapter labels + the UNVERIFIED copy prefix; the P3 entry shape |
 | 14 | csv | formula guard kept (`=`, `+`, `-`, `@`, tab, CR), quotes, commas, newlines, CJK, BOM, CRLF |
 | 15 | honesty | render the step components and the history view with `react-dom/server` using fixture states for every outcome/noneReason; assert: no "verified" wording; LC ID/link only appear for Candidate-sourced data; the "No match returned by this search" wording; the legacy UNVERIFIED label |

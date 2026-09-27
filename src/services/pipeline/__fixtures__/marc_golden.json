@@ -182,6 +182,30 @@
    "marcKey": null,
    "expectStatus": "unavailable",
    "expectReason": "no key"
+  },
+  {
+   "authority": "lcsh",
+   "label": "Total $ value",
+   "marcKey": "150  $aTotal $ value",
+   "expectStatus": "unavailable",
+   "expectReason": "unparseable key",
+   "_note": "residual $ in a value (review round 2)"
+  },
+  {
+   "authority": "lcnaf",
+   "label": "Smith, John",
+   "marcKey": "1009 $aSmith, John",
+   "expectStatus": "unavailable",
+   "expectReason": "bad indicator",
+   "_note": "600 ind1 must be 0/1/3 (review round 2)"
+  },
+  {
+   "authority": "lcsh",
+   "label": "The example",
+   "marcKey": "130 4$aThe example",
+   "expectStatus": "from-authority",
+   "expectText": "630 40 $a The example",
+   "_note": "synthetic nonzero nonfiling count (review round 2)"
   }
  ]
 }
