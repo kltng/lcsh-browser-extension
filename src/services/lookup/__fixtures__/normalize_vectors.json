@@ -1,5 +1,5 @@
 {
- "_source": "Lead-written for SPEC-P4 §2.1 NORMALIZE_V1; cross-checked 45/45 identical between a Python and a JavaScript implementation (2026-09-27). The coder must not edit this file.",
+ "_source": "Lead-written for SPEC-P4 §2.1 NORMALIZE_V1; cross-checked identical between a Python and a JavaScript implementation (45 cases 2026-09-27; 6 Unicode-boundary cases added 2026-09-27 for the builder round-3 review: 51/51). The coder must not edit this file.",
  "version": "NORMALIZE_V1",
  "cases": [
   {
@@ -181,6 +181,30 @@
   {
    "input": "x y",
    "expected": "x y"
+  },
+  {
+   "input": "a​b",
+   "expected": "a​b"
+  },
+  {
+   "input": "﻿Cats",
+   "expected": "﻿cats"
+  },
+  {
+   "input": "a᠎b",
+   "expected": "a᠎b"
+  },
+  {
+   "input": "Cats\t\n History",
+   "expected": "cats history"
+  },
+  {
+   "input": "x. .",
+   "expected": "x."
+  },
+  {
+   "input": "𮯰 Test",
+   "expected": "𮯰 test"
   }
  ]
 }
