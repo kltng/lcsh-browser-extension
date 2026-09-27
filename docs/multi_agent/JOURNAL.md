@@ -37,3 +37,123 @@
   `--allowedTools` denied a compound build command; the coder retried it
   bare and said so. Reviewer (gpt-6-astra, verified in the rollout): 0 MCP
   tools, write blocked.
+- **Phase 1 probes (lead harness: puppeteer-core + owner's Chrome 153 + throwaway profile).**
+  - DB: PASS. sqlite-wasm 3.53.4 in a module worker of an MV3 page with
+    `'wasm-unsafe-eval'`; OPFS SAH pool; `importDb` with an async chunk
+    callback; FTS5 with `unicode61 remove_diacritics 2` ("quebec" finds
+    Québec; prefix search works). Storage quota about 35 GB.
+  - Providers from `chrome-extension://` with host_permissions: Gemini 200,
+    OpenRouter 200, DeepSeek 200 (`deepseek-chat` now answers as
+    `deepseek-flash`), LM Studio 200, LOC suggest2 200, HF 200. Anthropic
+    and OpenAI give 401 on a fake key, so they are not blocked by CORS.
+  - Nano: in the throwaway profile, the probe EXTENSION gets "unavailable",
+    while an https web page in the same profile gets "downloadable".
+    on-device-internals says performance class High and all criteria true.
+    The APFS-cloned model folder is not registered (assets empty). The
+    cause of the extension-only "unavailable" is unknown (maybe the CDP
+    `Extensions.loadUnpacked` path). Time-boxed: the Nano probe moves to
+    the owner's daily Chrome with a normal "Load unpacked".
+  - Harness lessons: puppeteer's defaults include
+    `--disable-features=...OptimizationHints...` and
+    `--disable-background-networking`, which block Nano; remove them with
+    `ignoreDefaultArgs`. `pkill -f ".dev-profile"` also matched the lead's
+    own shell (a self-observing check); match `Google Chrome.*\.dev-profile`.
+- **Phase 2 measurement** started on the server (`~/work/lcsh-db-measure`).
+  Fetching all 4 LOC files took 251 s (2.9 GB).
+- **Nano probe in the owner's daily Chrome 153 (Load unpacked): PASS.** Text and
+  image both "available". `create` took 17.6 s (first); a `responseConstraint`
+  JSON prompt took 9.4 s and gave valid schema JSON; image OCR "MING CHINA"
+  was correct in 0.7 s. contextWindow = 9,216 tokens; `params()` = {}.
+  Quality: invented forms ("Felines--Europe--History", "Cats--Medieval
+  period"), so lookup + selection are essential. Decision: automated tests
+  use a fake LanguageModel; the live Nano check is a manual owner step in the
+  daily Chrome at phase gates (the throwaway-profile extension context says
+  "unavailable"). The probe copy in ~/Downloads was deleted.
+- **Build measurement (old builder, server).** After 3 h the full build was at
+  4.3 M of 12.3 M LCNAF names, single-threaded with per-row FTS triggers;
+  estimate about 8 h in total. **The server disk is a rotating HDD.** New LCSH
+  count 513,470 (May: 512,644).
+- **LOC data census.** No `owl:deprecated` exists. Deprecated records are
+  `skos-xl:Label` with `literalForm`, changeReason "deprecated" and
+  `rdfs:seeAlso` replacements; the old parser drops them (no prefLabel). No
+  `skos:scopeNote`. Records sit in `# BEGIN/# END` blocks with blank-node
+  lines mixed in. Samples are saved in `lcsh-db-builder/docs/data-census/`.
+- **Query-plan trap measured.** The old lcsh.db has no `sqlite_stat1`;
+  `label_normalized=? AND authority=?` used `idx_auth_authority`: 10.0 s vs
+  0.8 s for 5 lookups. Added to both specs (ANALYZE + composite index +
+  plan-assertion tests).
+- **Jev experiment (owner request).** Jev (TypeSafe System One, via
+  OpenRouter `/api/v1/systemone`, model `typesafe/jev-1.13`) returns
+  decisions, not text: `noul` (yes/no probability), `choice`
+  (`criteria`: {id: text}), and `score` (`criteria`: ordered levels). Each
+  call costs about $0.00001–0.00002. Script `.dispatch/jev/jev_eval.py` runs
+  on the server over the LCSHBench dev split (not the blind test split). It
+  compares n-grams found in LCSH → Jev centrality score → DB search → Jev
+  yes/no per heading, against a Gemini 2.5 Flash suggest + exact-validate
+  baseline.
+- Lead shell lessons (again): `pkill -f <pattern>` inside `ssh '...'` kills
+  its own shell; bracket patterns fail if the literal appears elsewhere in
+  the command. ssh with a remote `nohup … &` still blocks; use
+  `(setsid nohup … &)`.
+- **Specs drafted.** `lcsh-db-builder/docs/SPEC.md` and
+  `lcsh-browser-extension/docs/SPEC.md`. Two codex spec reviews run in
+  parallel. Both watchdogs watch the same `~/.codex/sessions/<day>` dir, so
+  one live reviewer masks the other's stall; per-rollout checks are done by
+  hand.
+- Census complete: 7,920 MADS DeprecatedAuthority = exactly the gap between blocks and concepts; 1.84 M subjects non-contiguous (blank-node interleaving). MADS component types could drive deterministic MARC subfield coding (future schema v3).
+- **Builder spec review round 1: REJECT (27 findings: 1 CRITICAL, 16 HIGH, 9 MEDIUM, 1 LOW).**
+  Reviewer (gpt-6-astra, medium) walked both samples line by line and ran
+  in-memory SQLite and Python/JS probes (it proved the plain FTS
+  integrity-check misses stale external content; `rank=1` catches it).
+  Triage: ALL accepted. Simplified: #11/#20 → core and full are independent
+  builds (LCSH parsed twice), append-only so no VACUUM, LCNAF
+  streamed+hashed; #19 → no resume, fresh `.part` + length + gzip test;
+  #8 → builder tests with node sqlite-wasm, and the SAH-pool import is
+  tested in extension Phase 5; #23 → per-table logical hashes; skip publish
+  when logical content is unchanged. CRITICAL #17 (mutable paths) →
+  immutable `releases/<release>/` paths + pointer promoted last; the
+  extension must verify sha256 and keep the old DB until the new one is
+  verified. #1/#4 need data: a block-level census
+  (`.dispatch/census/block_census.py`) is running on all three files.
+- **Extension spec review round 1: REJECT (32 findings: 23 HIGH, 8 MEDIUM, 1 LOW).**
+  All accepted on evidence; the key ones were spot-checked: SAH-pool
+  exclusivity vs one worker per tab (#1); importDb truncates its target, so
+  never import into the active file (#22); PWA endpoints are China-region
+  (#3); Python vs JS `\s` differ (#29, the same as builder #24). The reviewer's
+  structure advice is adopted: split into per-phase specs and freeze
+  SPEC-P3 (providers, settings, Nano, legacy bridge) first. Q1 answer: keep
+  hand-written adapters. Owner decision: Chinese providers get a Region
+  setting (International / China).
+- **Jev smoke (2 records): the pipeline works**, about 2.2 s and $0.0003 per
+  record. It misses subdivided forms (Sociology--Research), so subdivision
+  candidates are now added. Google returns 403 (HTML) to the build server's
+  IP for the Gemini key (works from the Mac), so the baseline now uses
+  `google/gemini-2.5-flash` via OpenRouter. The label-map preload is cached
+  (50 s once). The full run (30 eng + 10 chi) was launched.
+- **Block census LCSH: complete classification, 0 anomalies.** 521,390 blocks =
+  513,470 Concept (en/untagged prefLabel, 1 inScheme) + 7,920 skos-xl:Label
+  deprecated (4,522 seeAlso + note; 3,199 note only; 199 neither — the
+  reviewer's "199" gap). Plain altLabel == XL alias literalForm sets for
+  EVERY record; no record has more than one prefLabel (the extra prefLabel
+  triples are on blank nodes). LCGFT: 2,874 = 2,681 + 193, also 0
+  anomalies. LCNAF running.
+- **Provider research** (subagent, official docs) saved to
+  `.dispatch/provider_research.md`. Live: Gemini `responseFormat` (the
+  documented replacement) was IGNORED (plain text back); `responseSchema`
+  works. DeepSeek: json_object only, thinks by default, reasoning eats
+  max_tokens, `thinking:{type:disabled}` works. SPEC-P3 v2 written
+  (provider table §3.1-T, Anthropic `output_config` structured output
+  instead of forced tools); round-2 review dispatched.
+- **SPEC-P3 review loop:** round 2 REJECT (16), round 3 APPROVE-WITH-CHANGES
+  (12; architecture confirmed, and the reviewer withdrew several of its own
+  earlier demands), round 4 fold-in APPROVE-WITH-CHANGES with 5 exact
+  edits. **Judgement call:** the 5 edits were applied VERBATIM as written
+  by the reviewer and grep-verified, and Phase 3 was dispatched without a
+  round 5. Rationale: the edits are mechanical, reviewer-authored text,
+  and the build review will re-check them. Round-3 catches that would have
+  shipped: Anthropic rejects temperature != 1.0 on current models; a stale
+  draft in tab B overwrites tab A's key even with the lock; "Load models"
+  was impossible for a new user (resolveConfig required a model).
+- Lead installed vitest 5.0.2 (exact, Node 24 supported) so the coder does
+  not touch the lockfile; build still 3 baseline warnings. HOUSE_RULES
+  6–12 added (defect classes from the spec reviews).
