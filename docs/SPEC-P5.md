@@ -1,6 +1,6 @@
 # SPEC-P5 — Local LCSH database in the extension
 
-Status: v2, 2026-09-27. v1 was REJECTED (14 findings, 4 HIGH;
+Status: v2.1, 2026-09-27 (review round 2 edits folded, §17). v1 was REJECTED (14 findings, 4 HIGH;
 `.dispatch/spec-review-p5-1/last_message.md`; v1 archived at
 `.dispatch/SPEC-P5.v1.md`). §16 maps each finding to its fix. Builds on
 SPEC-P4 (lookup step, Candidate, honesty rule) and the builder contract
@@ -106,7 +106,7 @@ The SAH-pool VFS needs exclusive access, even for read-only use.
   wasm check uses the same version). No remote code.
 - `installOpfsSAHPoolVfs({name: 'lcsh-pool'})`. A pool-busy error is reported
   as contention (`kind: 'db_busy'`), never as corruption.
-- RPC page → worker `{id, op, args, generation}`; worker → page `{id, ok,
+- RPC page → worker `{id, op, args, workerGeneration}`; worker → page `{id, ok,
   result}` / `{id, ok: false, error: {kind, message}}`; progress events.
   Ops: `status`, `query` (a named query from `sql.js` + bound parameters;
   never raw SQL), `install`, `cancel`, `uninstall`.
@@ -117,13 +117,28 @@ The SAH-pool VFS needs exclusive access, even for read-only use.
 
 ### 3.3 Settings bridge
 
-The worker cannot call `chrome.storage`. Every settings read/write the
-installer needs is a worker → page request `{bridgeId, generation,
-operationId, action: 'read' | 'commit', expected, next}` handled by the
-client with `settings.js` under `'lcsh-settings'`. `commit` rereads the
-current value and writes `next` only if the current value equals
-`expected`; it answers after the write is confirmed (`{ok, current}`). A
-request with a stale `generation` is refused.
+The worker cannot call `chrome.storage`. Every settings access the installer
+needs is a worker → page request `{bridgeId, workerGeneration, operationId,
+action, expectedLocalDb, patch}` handled by the client with `settings.js`:
+- `action: 'read'` → the current `{lookupBackend, localDb,
+  localDbPendingDeletes}`.
+- `action: 'commit'`: under `'lcsh-settings'`, the client (1) checks that
+  `workerGeneration` is the client's current worker generation and
+  `operationId` is the running mutation, (2) rereads settings, (3) compares
+  `expectedLocalDb` STRUCTURALLY (deep equality of the record, `null`
+  included) with the fresh `localDb`, (4) applies `patch` and writes, and
+  answers after the write is confirmed: `{ok: true, current}` or `{ok: false,
+  reason: 'stale-generation' | 'changed' | 'write-failed', current}`.
+- `patch` is allowlisted: `localDb`, `lookupBackend`,
+  `pendingDeletesAdd: [names]`, `pendingDeletesRemove: [names]`. The
+  add/remove lists are applied to the FRESH `localDbPendingDeletes` read in
+  step 2; every other setting is preserved.
+- Worker replacement: the client first increments `workerGeneration` (so
+  later bridge requests from the old worker are refused), then WAITS for
+  every bridge write it already started to settle, and only then starts the
+  new worker's §3.4 recovery.
+- Naming: `workerGeneration` (this section) and `installationIdentity`
+  (§6.5) are different things.
 
 ### 3.4 Startup recovery (before the client is ready)
 
@@ -132,17 +147,22 @@ request with a stale `generation` is refused.
    pool files, state `recovery-unavailable` ("Local database settings could
    not be read"), serve no local queries, `loc-api` for runs.
 3. Recorded active file (`localDb.file`): open read-only and validate it
-   cheaply: §4.5 steps 5–6, and `page_count × page_size` = `localDb.dbSize`
-   (the full hash was checked at install; it is not repeated at every
-   start). Missing or failing → state `repair-needed` ("The local
-   database is damaged or missing" + Repair / Uninstall). Never promote
-   another file because it exists.
+   cheaply against the INSTALLED RECORD (not the pointer or a newly selected
+   profile): §4.5 steps 5–6 with `db_meta.profile = localDb.profile` and
+   `compat_fingerprint = localDb.compatFingerprint`, and
+   `page_count × page_size` = `localDb.dbSize` (the full hash was checked at
+   install; it is not repeated at every start). Missing or failing → state
+   `repair-needed` ("The local database is damaged or missing" + Repair /
+   Uninstall): NO local queries are served; runs use `loc-api` with a
+   visible notice until a repair succeeds. Never promote another file
+   because it exists.
 4. Delete every pool file that is not the active file (leftover staging
    files and `localDbPendingDeletes` entries). Deletion is idempotent (an
    absent file counts as deleted). Successful or absent entries are removed
    from `localDbPendingDeletes`; failures stay. The active file is never
    deleted here.
-5. Then the client is ready and queries are served.
+5. Then the client is ready. Local queries are served only in the normal
+   state (not in `repair-needed` or `recovery-unavailable`).
 
 ## 4. Install, update, uninstall
 
@@ -161,16 +181,18 @@ required, exact types):
 - `pointer_version === 1`, `schema_version === 2`,
   `normalize_version === 'NORMALIZE_V1'`, `compat_fingerprint` in the
   extension's `SUPPORTED_FINGERPRINTS` constant;
-- `release` matches `^(\d{4})\.(\d{2})\.(\d{2})\.([1-9]\d*)$` and is a real
-  date; releases compare as four numbers;
+- `release` matches `^(\d{4})\.(\d{2})\.(\d{2})\.([1-9]\d*)$`, is a real
+  date, and its sequence number is a safe integer; releases compare as four
+  numbers;
 - `release_commit` is 40 lowercase hex;
 - for each profile: `gz_size`, `db_size` are positive safe integers;
   `sha256_gz`, `sha256_db` are 64 lowercase hex; `url_pinned` parses with
   `new URL()` to protocol `https:`, host `huggingface.co`, no username,
   password, query or fragment, and a pathname EXACTLY equal to
   `/datasets/kltng/lcsh-db-lite/resolve/<release_commit>/releases/<release>/lcsh-<profile>.db.gz`
-  (string equality after parsing, which also rejects dot-segments and
-  encoded separators).
+  (string equality after parsing: alternate spellings that normalize to
+  exactly this path are allowed; encoded separators or anything that yields
+  a different pathname are rejected).
 - The installer uses only the pointer's profile entries. It does not read the
   manifest or the index files.
 - Unsupported version or fingerprint → "A newer database format is available;
@@ -206,47 +228,69 @@ result is shown, not required).
    512 bytes (smaller leading chunks are coalesced).
 7. Progress events at most every 500 ms (compressed bytes / `gz_size`).
 8. No bytes for 60 s → abort (`network_stalled`).
-9. `cancel` before the commit point (§4.5 step 7): abort the fetch, stop at
-   the next pull, delete the staging file, keep the old installation.
+9. `cancel` before the `committing` state (§4.5 step 7): abort the fetch,
+   stop at the next pull, then the common terminal rule (§4.8).
 
 ### 4.5 Verify, commit, switch
 
 1. Stream counts and both stream hashes must equal the pointer's values.
 2. Open the staging file read-only (the new handle is kept open).
-3. **Stored-byte check** (the importer ignores short writes): read the
-   database back AS SQLITE SEES IT: `SELECT pgno, data FROM sqlite_dbpage
-   WHERE pgno BETWEEN ?1 AND ?2 ORDER BY pgno` in bounded batches (≤ 8 MiB
-   per batch), requiring consecutive page numbers and full-size pages. The
-   concatenated pages must have exactly `db_size` bytes
-   (`page_count × page_size`) and SHA-256 `sha256_db`. (`sqlite_dbpage` is
-   compiled into the pinned 3.53.4 build: lead probe 2026-09-27. For a
-   DELETE-mode database, pages 1…N are the file's bytes. The builder
-   publishes DELETE mode, whose header bytes 18–19 are already 1, 1, so the
-   importer's header rewrite changes nothing: lead-checked on the real core
-   and full files. Raw pool-handle offsets are NOT used: pool files carry a
-   pool header. `exportFile()` is not used: it allocates the whole file.)
-4. Any mismatch in 1 or 3 → close the handle, delete staging, keep the old
-   installation, "The download was damaged; nothing was changed."
+3. **Stored-byte check** (the importer ignores short writes). Get the
+   staging database's `sqlite3_file` with
+   `sqlite3_file_control(db, 'main', SQLITE_FCNTL_FILE_POINTER, pOut)` and
+   call its VFS methods: `xFileSize` must equal `db_size`; then sequential
+   `xRead` calls over logical offsets `[0, db_size)` with one reusable buffer
+   of at most 8 MiB, rejecting every result other than `SQLITE_OK`
+   (including `SQLITE_IOERR_SHORT_READ`), feed SHA-256; the digest must equal
+   `sha256_db`. Separately, `page_count × page_size` must equal `db_size`.
+   - This reads through the VFS, so the SAH pool's own file header stays
+     hidden, and it reads the real bytes of every page (unlike
+     `sqlite_dbpage`, which returns synthesized zeros for the lock-byte page
+     at offset 1 GiB, and whose `BETWEEN` ranges are not index-bounded).
+   - Lead probe 2026-09-27 (pinned 3.53.4, Node, `memdb` VFS): the file
+     pointer, `xFileSize` and `xRead` work from JS (`sqlite3_io_methods`
+     offsets `xRead` 8, `xFileSize` 24 on wasm32); the hash equals the
+     page-by-page hash; a read past the end returns 522
+     (`SQLITE_IOERR_SHORT_READ`). The SAH-pool VFS is checked in Chrome
+     (§13).
+   - The builder publishes DELETE mode; header bytes 18–19 are already 1, 1
+     (lead-checked on the real files), so the importer's header rewrite
+     changes nothing.
+   - Between read batches the worker yields to its event loop and handles
+     `cancel` and `status` there; it reports a separate "Verifying" phase
+     with progress. A healthy batch never trips the 10 s worker watchdog.
+     Cost: one extra read + hash of `db_size` bytes (5.4 GB for `full`);
+     its browser time is measured in §13, not estimated.
+4. Any failure in steps 1–3 → the common terminal rule (§4.8) with "The
+   download was damaged; nothing was changed."
 5. `db_meta`: `profile` equals the SELECTED profile; `schema_version` =
    `'2'`; `normalize_version` = `'NORMALIZE_V1'`; `lh_format` = `'LH1'`;
    `compat_fingerprint` = the pointer's.
 6. `sqlite_master` has exactly these application objects by name:
    `db_meta`, `auth`, `alt_label`, `hierarchy`, `auth_fts`, `alt_label_fts`
    (FTS shadow tables and indexes are allowed).
-7. **Commit point.** Gate queries (new queries wait; running ones finish).
-   Bridge `commit` with `expected` = the current `localDb` record and
-   `next` = `{localDb: newRecord, localDbPendingDeletes: [...current,
-   oldFile]}` (old file only if there was one). The confirmed write is the
-   commit. From this moment `cancel` is refused ("Finishing install").
-   - Write refused (someone else changed settings) or failed → close the new
-     handle, delete staging, reopen nothing new, ungate, report; the old
-     installation is untouched.
-   - Write result uncertain (bridge error after sending) → reread settings;
-     whichever record they hold decides which file stays active.
+7. **Commit point.** First enter the state `committing`: `cancel` is
+   refused from now on ("Finishing install"); a `cancel` accepted earlier
+   must have finished its cleanup before this step can start. Gate queries
+   (new queries wait; running ones finish). Send the bridge `commit` with
+   `expectedLocalDb` = the record read at the start of the operation and
+   `patch` = `{localDb: newRecord, pendingDeletesAdd: [oldFile]}` (only if
+   there is an old file). The CONFIRMED WRITE is the commit point; the answer
+   is how the worker learns it. While the answer is outstanding, BOTH files
+   are kept.
+   - `{ok: false, reason: 'changed' | 'stale-generation' | 'write-failed'}`
+     → the common terminal rule (§4.8); the old installation is untouched.
+   - Bridge error or no answer (result uncertain) → wait for the outstanding
+     bridge operation to settle, then `read` again under the settings lock.
+     If `localDb` equals the new record → continue at step 8; if it equals
+     the old record → terminal rule; if the read fails or shows anything
+     else → keep BOTH files, serve no local queries, state
+     `recovery-unavailable`.
 8. Switch: the worker's active handle becomes the new handle; the old handle
    is closed; ungate.
-9. Delete the old file (never while open). Success → a bridge commit removes
-   it from `localDbPendingDeletes`; failure → it stays there for §3.4.
+9. Delete the old file (never while open). Success → a bridge commit with
+   `patch: {pendingDeletesRemove: [oldFile]}` (and `expectedLocalDb` = the
+   new record); failure → it stays pending for §3.4.
 
 A crash at any point leaves settings naming either the old file (commit not
 done) or the new file (commit done); §3.4 then cleans up. There is never a
@@ -268,15 +312,34 @@ deletion (→ `repair-needed`).
 
 ### 4.7 Uninstall
 
-1. Refuse if another mutation runs. Gate queries; close the active handle.
-2. Bridge commit: `expected` = current record, `next` = `{localDb: null,
-   lookupBackend: 'loc-api', localDbPendingDeletes: [...current, file]}`.
-3. Write failed/refused → reopen the old file read-only, ungate, report; the
-   installation stays.
-4. Delete the file; on success remove it from `localDbPendingDeletes`. The UI
-   distinguishes "Uninstalled" from "Uninstalled; cleanup pending".
+1. Refuse if another mutation runs. Enter `committing` (no cancel). Gate
+   queries; close the active handle.
+2. Bridge commit: `expectedLocalDb` = current record, `patch` =
+   `{localDb: null, lookupBackend: 'loc-api', pendingDeletesAdd: [file]}`.
+3. Refused/failed → reopen the file read-only, ungate, report; the
+   installation stays. Uncertain → the same reconciliation as §4.5 step 7
+   (reread; `null` → continue; old record → reopen and ungate; otherwise
+   `recovery-unavailable`, files kept).
+4. Delete the file; on success `pendingDeletesRemove`. Ungate on every
+   resolved exit. The UI distinguishes "Uninstalled" from "Uninstalled;
+   cleanup pending".
+
+### 4.8 Common terminal rule (every failure or cancel before the commit)
+
+Stop the import or verification; finalize statements; close every staging
+handle; then delete the staging file. A failed deletion is recorded with
+`pendingDeletesAdd` (best effort) and otherwise left to §3.4, which deletes
+every non-active file anyway. Ungate queries. Report the error in plain
+words with "Try again".
 
 ## 5. Row → Candidate mapping (`localDb.js`, one mapper)
+
+**Query contract.** Authority retrieval uses exactly SCHEMA_QUERIES Q1–Q5.
+Installation and recovery (§3.4, §4.5) may additionally run read-only
+`db_meta` / `sqlite_master` reads, `PRAGMA page_size` / `page_count`, and
+the §4.5 step 3 file read. These are internal to the worker and never
+exposed through the `query` RPC. (The builder spec v3.4 §6.1 states the
+same exception.)
 
 An `auth` row `{uri: localId, authority, label, deprecated, marc_key}` maps to
 `{cid: authority + ':' + localId, authority, localId,
@@ -352,12 +415,24 @@ subdivisions are never appended to authority MARC.
 ### 6.4 Backend return shape
 
 `lookup(suggestion, {limit, signal, bypassCache})` returns P4's raw shape
-`{suggestionId, candidates, failures, incomplete, rejectedHits, requests}`.
-`runLookupStep()` keeps building the outcome. Rules:
-- Candidates from completed parts survive a later failure.
-- A failed part adds its error kind to `failures` (local parts:
-  `local_db`, a new kind in `types.js` and `pipelineText.js`: "The local
-  database could not answer this search").
+plus two additive fields: `{suggestionId, candidates, failures, incomplete,
+rejectedHits, requests, provenance, replacementNotes}`.
+- `provenance` = `{backend, profile, release, releaseCommit, file}` captured
+  when the lookup starts. `backend` is the EFFECTIVE backend: `'loc-api'`,
+  `'local-db'`, or `'mixed'` (core + LOC), including the fallbacks of §2 and
+  §3 (then `'loc-api'`; profile/release/file null).
+- `replacementNotes` = the §5 notes.
+- `runLookupStep()` and `makeLookupResult()` carry both fields into the
+  LookupResult (today the factory drops unknown fields; it is extended).
+- Dedupe by cid in ranking keeps P4's choice of the surviving candidate and
+  MERGES the unique `replacementFrom` entries of all duplicates into it.
+- `runLookupStep()` keeps building the outcome. Candidates from completed
+  parts survive a later failure: results of Q1/Q2/Q4 and of Q3a/Q3b are
+  accumulated separately, so a failing later sub-query never discards
+  accepted candidates.
+- A failed part adds its error kind to `failures` (local parts: `local_db`,
+  a new kind in `types.js` and `pipelineText.js`: "The local database could
+  not answer this search").
 - `requests` lists LOC URLs and local entries `local:<query>:<authority>`.
 - Budget expiry → `incomplete: true` (→ `partial`/`failed` with `timeout`);
   caller cancellation commits nothing (P4 rule).
@@ -369,11 +444,11 @@ subdivisions are never appended to authority MARC.
 
 ### 6.5 Installation identity per lookup
 
-Each lookup attempt captures `{backend, profile, release, releaseCommit,
-file}` (the generation). Every local query carries it; the worker answers a
-query for a generation that is no longer active with `db_generation_changed`
-(→ a `local_db` failure for that part), never with rows from the new file.
-Completed results keep their provenance.
+Each lookup attempt captures the `installationIdentity` `{profile, release,
+releaseCommit, file}`. Every local query carries it; the worker answers a
+query for an identity that is no longer active with
+`db_generation_changed` (→ a `local_db` failure for that part), never with
+rows from the new file. Completed results keep their provenance.
 
 ## 7. Name MARC keys (`pipeline/nameKeys.js`)
 
@@ -405,8 +480,12 @@ revision and AbortController. It resolves the DISTINCT cids needing a key:
 - A new run, a relevant lookup retry, a changed choice or disposal aborts
   and invalidates it.
 - Already resolved keys are kept (per run, by cid) and reused when
-  recommendations are regenerated; a newly chosen unresolved name starts a
-  new operation.
+  recommendations are regenerated; every reuse goes through `buildMarc()`
+  again against the CURRENT candidate copy (a changed label never inherits an
+  unchecked earlier MARC result). A newly chosen unresolved name starts a new
+  operation. Ordinary regeneration never loops on failed resolutions.
+- "Retry name MARC keys" bypasses the run cache (fresh requests) for the
+  UNRESOLVED selected cids only; resolved keys stay reused.
 - A failure leaves the recommendation in place with MARC unavailable and its
   reason; the Recommendations step has "Retry name MARC keys".
 
@@ -461,7 +540,7 @@ Q1/Q2 0.1 ms; Q3a "john" (162,048 FTS matches) 280 ms, Q3b "john" 226 ms,
 is an ESTIMATE (2–3×); only browser measurement counts. Targets in Chrome
 with `full`: Q1/Q2 < 20 ms; Q3a or Q3b < 1 s for the most common single
 words; one suggestion's whole local lookup < 2 s; worker start (wasm + VFS +
-open + §3.4 recovery) < 3 s; stored-byte check (§4.5 step 2) reported with
+open + §3.4 recovery) < 3 s; stored-byte check (§4.5 step 3) reported with
 its time. A miss is reported with numbers before any design change.
 
 ## 12. Tests (vitest, Node)
@@ -491,13 +570,23 @@ to them.
    failed / uncertain, switch and delete order (never delete an open or the
    active file), `pendingDeletes`, same-release no-op, profile switch,
    uninstall success/failure, §3.4 recovery incl. unreadable settings and a
-   missing active file.
+   missing active file; `cancel` racing the commit request (refused once
+   `committing`); commit answer lost → reread decides; the stored-byte reader
+   against a fake VFS returning a short read, an error code, and a wrong
+   `xFileSize`; batch yielding (a `status` ping answered mid-verify).
 8. SHA-256 wrapper: NIST vectors, random chunk boundaries, a stream longer
    than 2^32 bytes (generated, bounded memory) for length accounting.
 9. Ownership client: lock unavailable → fallback state; crash → reject
-   pending, one re-create, second crash → `loc-api`; bridge stale generation.
+   pending, one re-create, second crash → `loc-api`; bridge: stale
+   `workerGeneration` refused, structural `expectedLocalDb` compare, patch
+   allowlist, pending-delete add/remove on a changed snapshot, drain of an
+   in-flight write before the new worker's recovery.
 10. Name keys: every §7 result case, cache reuse, deadline, staleness
-   (changed choice during the operation), Retry.
+   (changed choice during the operation), Retry bypasses the cache for
+   unresolved cids only, reused keys re-checked by `buildMarc()`.
+10b. Result metadata: `provenance` and `replacementNotes` survive
+   `runLookupStep` → `makeLookupResult` → history build/rebuild; merged
+   `replacementFrom` on dedupe; a failing Q3b keeps Q1/Q2 candidates.
 11. History/CSV: provenance round-trip, `marc_reason`, old entries.
 12. Honesty (`react-dom/server`): Matches/Recommendations with `local-db`
    and mixed candidates; IDs/links only from rows; variant/replacement
@@ -531,7 +620,7 @@ tiny fixtures test correctness only.
 
 1. Streaming SHA-256: pinned `@noble/hashes` behind `sha256.js`.
 2. No `PRAGMA quick_check`: acceptable because the stored bytes are
-   verified (§4.5 step 2) and the builder runs structural gates.
+   verified (§4.5 step 3) and the builder runs structural gates.
 3. Offline mixed routing: `partial` with candidates, else `failed`.
 4. Variant matches keep P4's classes; `via` explains them.
 
@@ -569,3 +658,17 @@ tiny fixtures test correctness only.
 | 12 | §4.2/§4.4 fetch options; §10 CSP and privacy text; §13 row 1 fresh profile |
 | 13 | §12 pinned Node + package, added rows; §13 fault matrix |
 | 14 | §4.3 additional vs peak space, estimate wording; §1 `webpack.common.js`; §11 factor marked as estimate |
+
+## 17. P5 review round 2 → v2.1
+
+| # | Fix |
+|---|---|
+| 1 | §4.5 step 7 `committing` state before the commit request; both files kept until resolved; uncertain → settle, reread, else `recovery-unavailable` |
+| 2 | §3.3 bridge: structural `expectedLocalDb`, allowlisted patch, pending-delete add/remove on the fresh snapshot, generation/operation check under the lock, drain before recovery; `workerGeneration` vs `installationIdentity` |
+| 3 | §4.5 step 3 VFS `xFileSize` + `xRead` via `SQLITE_FCNTL_FILE_POINTER` (lead-probed), plus the page-count check |
+| 4 | §4.5 step 3 yields between batches, "Verifying" phase, watchdog-safe; §11/§14 step references |
+| 5 | §4.8 common terminal rule; §4.7 uncertain-commit reconciliation + ungating; §3.4 `repair-needed` serves no local queries; startup compares with the installed record |
+| 6 | §6.4 `provenance` + `replacementNotes` through `runLookupStep`/`makeLookupResult`/history; effective backend; `replacementFrom` merge; separate accumulation |
+| 7 | §7 Retry bypasses the cache for unresolved cids; reused keys re-run `buildMarc()` |
+| 8 | §5 query-contract exception; builder SPEC v3.4 §6.1 carries it |
+| 9 | §4.2 URL wording (normalizing spellings allowed); release sequence safe integer |
