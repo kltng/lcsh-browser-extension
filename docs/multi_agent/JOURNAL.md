@@ -179,3 +179,13 @@
   median 5.4 s. The n=40 CIs are wide; nothing here is a final ranking.
 - 23:18 P3 code review 1: REJECT (2 HIGH, 7 MED, 1 LOW); all accepted (validator counterexamples lead-verified). #9 narrowed: no DOM libs; fakes made Chrome-like; logWorkflowError sanitizing by construction; UI proofs moved to lead live pass. Pre-existing bug found live: legacy MARC emits 150 (authority tag) instead of 650 — also in untouched v1.1.0 (verified), so it is a P4 target, not a P3 regression. Live so far: migration PASS; Gemini 5-step PASS with both provenance fields.
 - 23:46 P3 fix loop 1 (10 fixes, 428 tests, 6/6 fix mutants killed) → review round 2 APPROVE-WITH-CHANGES (4 exact edits) → fix loop 2 (434 tests, 3/3 mutants killed). Judgement: no 3rd review round for reviewer-prescribed, mutation-verified edits. Live: OpenRouter Save & use + Test (Connection OK; JSON checked locally since model meta not loaded) + full 5-step run PASS. Harness note: CDP-loaded extensions lose runtime-granted optional permissions on relaunch; the harness re-grants via Runtime.evaluate(userGesture:true). Chrome under automation AUTO-ACCEPTS permission requests, so the DENY path needs a human.
+- **Experiment 3 (owner request): Gemini-2.5-flash (via OpenRouter) → DB → Jev.**
+  Same 40 records, official scorer. Exact F1 / root F1: Gemini+exact (same
+  "4–8 candidates" prompt) 0.158/0.360 vs Gemini→DB→Jev 0.152/0.356.
+  Per record, Jev found more exact hits on 2 records and fewer on 5. **Jev
+  adds nothing on top of a strong suggester**; it helped only the weaker
+  Qwen (root 0.268→0.341). The prompt matters more than the picker:
+  Gemini with the exp1 prompt (3–6 headings) scored root F1 0.444 vs 0.360
+  with the 4–8-candidate prompt. P4 decision input: no Jev by default;
+  tune the suggestion prompt; n=40, CIs overlap.
+- 2026-09-27 00:04 **Privacy scrub (owner approved).** The feature branch history contained both owner emails, a local home path and the build server IP in PLAN/WORKFLOW/JOURNAL. Rewritten with git-filter-repo --replace-text on the branch only (main/dev untouched), verified 0 leftovers and a docs-only diff, force-pushed with lease. Local backup ref backup/feat-pre-scrub-2026-09-27 (never pushed). Added a local pre-commit hook that blocks these identifiers. Rule for the journal: refer to 'account A' (main coder) and 'account B' (backup coder), '~' paths, and '<build-server>'.
