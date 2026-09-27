@@ -1,4 +1,10 @@
-import React, { createContext, useState, useContext, useEffect } from 'react';
+import React, { createContext, useState, useContext, useEffect, useRef } from 'react';
+import {
+  loadSystemPromptRules, saveSystemPromptRules, getSettings, onSettingsChanged
+} from '../services/settings';
+import {
+  initialRulesState, editRules, applyStoredRules, afterRulesSave, afterRulesReset
+} from './promptRulesState';
 
 // Create context
 const AppContext = createContext();
@@ -25,6 +31,23 @@ const DEFAULT_SYSTEM_PROMPT_RULES = `# LCSH Selection Rules
 
 const MAX_CONVERSATION_HISTORY = 25;
 
+export const SETTINGS_LOAD_ERROR = 'Settings could not be loaded. Reload the page or check Chrome storage.';
+
+/**
+ * Load the settings the app needs at start (runs settings.ready() first).
+ * @param {string} defaultRules - Default LCSH selection rules
+ * @returns {Promise<{ok:true, systemPromptRules:string}|{ok:false, message:string}>}
+ */
+export const initAppSettings = async (defaultRules) => {
+  try {
+    const systemPromptRules = await loadSystemPromptRules(defaultRules);
+    return { ok: true, systemPromptRules };
+  } catch (err) {
+    console.error('Failed to load settings');
+    return { ok: false, message: SETTINGS_LOAD_ERROR };
+  }
+};
+
 const handleStorageError = (fallbackMessage) => {
     if (chrome.runtime.lastError) {
         console.error(fallbackMessage, chrome.runtime.lastError);
@@ -45,11 +68,19 @@ export const AppProvider = ({ children }) => {
         images: []
     });
 
-    // State for system prompt
-    const [systemPromptRules, setSystemPromptRules] = useState(DEFAULT_SYSTEM_PROMPT_RULES);
+    // State for system prompt: the editor text, the stored value it was loaded from, and a stale flag
+    const [rulesState, setRulesState] = useState(() => initialRulesState(DEFAULT_SYSTEM_PROMPT_RULES));
+    const rulesStateRef = useRef(rulesState);
+    rulesStateRef.current = rulesState;
+    const systemPromptRules = rulesState.text;
+    const setSystemPromptRules = (text) => setRulesState((state) => editRules(state, text));
 
-    // State for API key
-    const [apiKey, setApiKey] = useState('');
+    // State for settings loading ('loading' | 'ready' | 'error') and its message
+    const [settingsStatus, setSettingsStatus] = useState('loading');
+    const [settingsError, setSettingsError] = useState(null);
+
+    // Provider/model that produced the current suggestions ({providerId, model} or null)
+    const [suggestionProvenance, setSuggestionProvenance] = useState(null);
 
     // State for workflow
     const [activeStep, setActiveStep] = useState(0);
@@ -62,31 +93,25 @@ export const AppProvider = ({ children }) => {
     // State for conversation history
     const [conversationHistory, setConversationHistory] = useState([]);
 
-    // Load API key from storage when component mounts
+    // Load settings (after migration) when component mounts
     useEffect(() => {
-        chrome.storage.local.get(['geminiApiKey', 'systemPromptRules'], (result) => {
-            const storageError = handleStorageError('Failed to load settings from Chrome storage');
-            if (storageError) {
-                setError(storageError);
-                return;
-            }
+      let alive = true;
+      initAppSettings(DEFAULT_SYSTEM_PROMPT_RULES).then((result) => {
+        if (!alive) return;
+        if (result.ok) {
+          setRulesState(initialRulesState(result.systemPromptRules));
+          setSettingsStatus('ready');
+        } else {
+          setSettingsError(result.message);
+          setSettingsStatus('error');
+        }
+      });
 
-            if (result.geminiApiKey) {
-                setApiKey(result.geminiApiKey);
-            }
-
-            if (result.systemPromptRules) {
-                setSystemPromptRules(result.systemPromptRules);
-            } else {
-                // Save default system prompt rules to storage
-                chrome.storage.local.set({ systemPromptRules: DEFAULT_SYSTEM_PROMPT_RULES }, () => {
-                    const saveError = handleStorageError('Failed to initialize system prompt rules');
-                    if (saveError) {
-                        setError(saveError);
-                    }
-                });
-            }
-        });
+      // Rules saved in another tab: a clean editor refreshes, a dirty one becomes stale
+      const unsubscribe = onSettingsChanged((changes) => {
+        if (!Object.hasOwn(changes, 'systemPromptRules')) return;
+        setRulesState((state) => applyStoredRules(state, changes.systemPromptRules.newValue));
+      });
 
         // Load conversation history
         chrome.storage.local.get(['conversationHistory'], (result) => {
@@ -100,17 +125,33 @@ export const AppProvider = ({ children }) => {
                 setConversationHistory(result.conversationHistory);
             }
         });
+
+      return () => {
+        alive = false;
+        unsubscribe();
+      };
     }, []);
 
-    // Reset system prompt rules to default
-    const resetSystemPromptRules = () => {
-        setSystemPromptRules(DEFAULT_SYSTEM_PROMPT_RULES);
-        chrome.storage.local.set({ systemPromptRules: DEFAULT_SYSTEM_PROMPT_RULES }, () => {
-            const storageError = handleStorageError('Failed to reset system prompt rules');
-            if (storageError) {
-                setError(storageError);
-            }
-        });
+    // Save the rules; stale (changed in another tab) keeps the editor text
+    const saveRules = async () => {
+      const { text, base } = rulesStateRef.current;
+      const result = await saveSystemPromptRules(text, base);
+      setRulesState((state) => afterRulesSave(state, result));
+      return result;
+    };
+
+    // Reset system prompt rules to default, with the same stale rule
+    const resetSystemPromptRules = async () => {
+      const { text: snapshot, base } = rulesStateRef.current;
+      const result = await saveSystemPromptRules(DEFAULT_SYSTEM_PROMPT_RULES, base);
+      setRulesState((state) => afterRulesReset(state, result, snapshot));
+      return result;
+    };
+
+    // Discard edits and load the rules stored now
+    const reloadSystemPromptRules = async () => {
+      const { systemPromptRules: stored } = await getSettings();
+      setRulesState(initialRulesState(stored));
     };
 
     // Save conversation to history
@@ -170,9 +211,14 @@ export const AppProvider = ({ children }) => {
         setBibliographicInfo,
         systemPromptRules,
         setSystemPromptRules,
+        saveSystemPromptRules: saveRules,
         resetSystemPromptRules,
-        apiKey,
-        setApiKey,
+        reloadSystemPromptRules,
+        systemPromptStale: rulesState.stale,
+        settingsStatus,
+        settingsError,
+        suggestionProvenance,
+        setSuggestionProvenance,
         activeStep,
         setActiveStep,
         initialSuggestions,

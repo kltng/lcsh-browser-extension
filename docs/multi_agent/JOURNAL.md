@@ -157,3 +157,25 @@
 - Lead installed vitest 5.0.2 (exact, Node 24 supported) so the coder does
   not touch the lockfile; build still 3 baseline warnings. HOUSE_RULES
   6–12 added (defect classes from the spec reviews).
+- 22:28 Phase 3 build dispatched to coder, auth: true account A
+- **Jev experiment result (LCSHBench dev, 40 records: 30 eng with abstracts +
+  10 chi; official scorer `lcsh-benchmark-score`).** Exact micro F1: Jev
+  0.144 vs Gemini-2.5-flash 0.182; root F1: 0.288 vs 0.444. Recall
+  similar (exact 0.169 vs 0.156); Jev loses on precision (0.126 vs 0.219;
+  it picks 5.35 headings per record vs 2.85). Jev finds 0 LCNAF names
+  (its candidates are LCSH-only by design). Cost for 40 records: Jev
+  $0.0098 vs Gemini $0.0128; median latency 2.2 s vs 1.5 s (Jev's latency
+  includes the lead-side DB search on the HDD server). Lesson: `python -m
+  lcsh_benchmark.score` silently does nothing (no `__main__` guard); use
+  the `lcsh-benchmark-score` entry point. A `| head` hid it once.
+- **Experiment 2 (owner request): Qwen3.8-27B (OpenRouter, strict json_schema,
+  reasoning off) suggests → DB candidates per suggestion → Jev `choice` +
+  `noul` filter.** Same 40 records, official scorer. Exact F1 / root F1:
+  Jev alone 0.144/0.288; Gemini-2.5-flash+exact 0.182/0.444; Qwen+exact
+  0.104/0.268; Qwen→DB→Jev 0.115/0.341. Jev as picker lifts Qwen's root
+  F1 by +0.07 (root precision 0.316→0.420), mostly by mapping near-miss
+  suggestions to real headings; the exact gain is within noise. Qwen3.8-27B
+  suggestions are weaker than Gemini's. Cost/record: Qwen+Jev about $0.0007;
+  median 5.4 s. The n=40 CIs are wide; nothing here is a final ranking.
+- 23:18 P3 code review 1: REJECT (2 HIGH, 7 MED, 1 LOW); all accepted (validator counterexamples lead-verified). #9 narrowed: no DOM libs; fakes made Chrome-like; logWorkflowError sanitizing by construction; UI proofs moved to lead live pass. Pre-existing bug found live: legacy MARC emits 150 (authority tag) instead of 650 — also in untouched v1.1.0 (verified), so it is a P4 target, not a P3 regression. Live so far: migration PASS; Gemini 5-step PASS with both provenance fields.
+- 23:46 P3 fix loop 1 (10 fixes, 428 tests, 6/6 fix mutants killed) → review round 2 APPROVE-WITH-CHANGES (4 exact edits) → fix loop 2 (434 tests, 3/3 mutants killed). Judgement: no 3rd review round for reviewer-prescribed, mutation-verified edits. Live: OpenRouter Save & use + Test (Connection OK; JSON checked locally since model meta not loaded) + full 5-step run PASS. Harness note: CDP-loaded extensions lose runtime-granted optional permissions on relaunch; the harness re-grants via Runtime.evaluate(userGesture:true). Chrome under automation AUTO-ACCEPTS permission requests, so the DENY path needs a human.

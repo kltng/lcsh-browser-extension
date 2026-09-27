@@ -26,7 +26,7 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorIcon from '@mui/icons-material/Error';
 import { useAppContext } from '../context/AppContext';
 import SimilarityScore from './SimilarityScore';
-import { generateMarcRecords } from '../services/geminiService';
+import { legacyGenerateMarc, describeActiveProvider, logWorkflowError } from '../services/legacyBridge';
 import ReactMarkdown from 'react-markdown';
 
 const escapeCsvCell = (value) => {
@@ -35,6 +35,31 @@ const escapeCsvCell = (value) => {
 
     return `"${safeValue.replace(/"/g, '""')}"`;
 };
+
+/**
+ * Builds the conversation history record saved by "Save & View History"
+ * @param {object} parts - Workflow results and the two provenance values ({providerId, model} or null)
+ * @returns {object} - The record passed to saveConversation()
+ */
+export const buildConversationRecord = ({
+  bibliographicInfo,
+  initialSuggestions,
+  sortedRecommendations,
+  selectedRecommendations,
+  averageSimilarity,
+  marcRecords,
+  suggestionProvenance,
+  marcProvenance
+}) => ({
+  bibliographicInfo,
+  initialSuggestions,
+  finalRecommendations: sortedRecommendations,
+  selectedRecommendations: selectedRecommendations.length > 0 ? selectedRecommendations : sortedRecommendations,
+  averageSimilarity,
+  marcRecords,
+  suggestionProvenance: suggestionProvenance || null,
+  marcProvenance: marcProvenance || null
+});
 
 const FinalRecommendations = () => {
     const {
@@ -45,7 +70,7 @@ const FinalRecommendations = () => {
         saveConversation,
         error,
         setError,
-        apiKey,
+        suggestionProvenance,
         isLoading,
         setIsLoading
     } = useAppContext();
@@ -57,6 +82,9 @@ const FinalRecommendations = () => {
     const [sortedRecommendations, setSortedRecommendations] = useState([]);
     const [marcRecords, setMarcRecords] = useState({});
     const [processingMarc, setProcessingMarc] = useState(false);
+    const [marcError, setMarcError] = useState(null);
+    const [marcProvenance, setMarcProvenance] = useState(null);
+    const [providerLabel, setProviderLabel] = useState('');
 
     // Sort recommendations and calculate average similarity when component mounts
     useEffect(() => {
@@ -81,16 +109,25 @@ const FinalRecommendations = () => {
 
     // Generate MARC records for high-scoring terms
     const generateMarcRecordsForHighScoring = async (recommendations) => {
-        try {
-            setProcessingMarc(true);
-            const result = await generateMarcRecords(apiKey, recommendations);
-            setMarcRecords(result.marcRecords);
-        } catch (err) {
-            console.error('Error generating MARC records:', err);
-            // Don't set error state here to avoid disrupting the UI
-        } finally {
-            setProcessingMarc(false);
-        }
+      try {
+        setProcessingMarc(true);
+        setMarcError(null);
+        describeActiveProvider().then(setProviderLabel).catch(() => setProviderLabel(''));
+        const result = await legacyGenerateMarc(recommendations);
+        setMarcRecords(result.marcRecords);
+        setMarcProvenance(result.provenance);
+      } catch (err) {
+        logWorkflowError('Error generating MARC records:', err);
+        // Show the error inline in the MARC status area, with a Retry button
+        setMarcError(err.message || 'Failed to generate MARC records');
+      } finally {
+        setProcessingMarc(false);
+      }
+    };
+
+    // Retry MARC generation after an error
+    const handleRetryMarc = () => {
+      generateMarcRecordsForHighScoring(sortedRecommendations);
     };
 
     // Handle back button
@@ -102,14 +139,16 @@ const FinalRecommendations = () => {
     const handleSaveAndViewHistory = () => {
         try {
             // Save the conversation to history
-            saveConversation({
-                bibliographicInfo,
-                initialSuggestions,
-                finalRecommendations: sortedRecommendations,
-                selectedRecommendations: selectedRecommendations.length > 0 ? selectedRecommendations : sortedRecommendations,
-                averageSimilarity,
-                marcRecords
-            });
+            saveConversation(buildConversationRecord({
+              bibliographicInfo,
+              initialSuggestions,
+              sortedRecommendations,
+              selectedRecommendations,
+              averageSimilarity,
+              marcRecords,
+              suggestionProvenance,
+              marcProvenance
+            }));
 
             // Show success message
             showSnackbar('Conversation saved to history');
@@ -280,10 +319,30 @@ const FinalRecommendations = () => {
             </Box>
 
             {processingMarc && (
-                <Box sx={{ display: 'flex', alignItems: 'center', mb: 3 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', mb: 3, gap: 1, flexWrap: 'wrap' }}>
                     <CircularProgress size={24} sx={{ mr: 1 }} />
                     <Typography>Generating MARC records for high-scoring terms...</Typography>
+                    {providerLabel && (
+                      <Typography variant="body2" color="text.secondary">
+                        ({providerLabel})
+                      </Typography>
+                    )}
                 </Box>
+            )}
+
+            {!processingMarc && marcError && (
+              <Alert
+                severity="error"
+                sx={{ mb: 3 }}
+                action={(
+                  <Button color="inherit" size="small" onClick={handleRetryMarc}>
+                    Retry MARC generation
+                  </Button>
+                )}
+              >
+                {marcError}
+                {providerLabel && ` (${providerLabel})`}
+              </Alert>
             )}
 
             {highScoringRecommendations.length === 0 ? (

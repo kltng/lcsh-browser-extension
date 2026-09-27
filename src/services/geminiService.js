@@ -1,65 +1,11 @@
-const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
-
 /**
- * Call the Gemini API with exponential backoff retry for transient errors
- * @param {string} apiKey - The Gemini API key
- * @param {object} requestBody - The request body
- * @param {number} maxRetries - Maximum number of retries (default 2)
- * @returns {Promise<object>} - The API response data
+ * Prompt builders and answer parsers for the LCSH workflow.
+ * Pure functions only: no fetch, no API keys. The provider calls live in
+ * legacyBridge.js and providers/.
  */
-const callGeminiWithRetry = async (apiKey, requestBody, maxRetries = 2) => {
-  let lastError;
-
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      const response = await fetch(`${GEMINI_API_URL}?key=${apiKey}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestBody),
-      });
-
-      if (response.ok) {
-        return await response.json();
-      }
-
-      const errorData = await response.json().catch(() => ({}));
-      const errorMessage = errorData.error?.message || `HTTP ${response.status}`;
-
-      // Don't retry client errors (400, 401, 403) — only retry 429 and 5xx
-      if (response.status === 429 || response.status >= 500) {
-        lastError = new Error(`Gemini API error (${response.status}): ${errorMessage}`);
-        if (attempt < maxRetries) {
-          const delay = Math.pow(2, attempt) * 1000; // 1s, 2s
-          await new Promise(r => setTimeout(r, delay));
-          continue;
-        }
-      }
-
-      // Non-retryable error
-      if (response.status === 401 || response.status === 403) {
-        throw new Error('Invalid or expired API key. Please check your Gemini API key in the extension popup.');
-      }
-      throw new Error(errorMessage);
-    } catch (error) {
-      if (error.message?.includes('Invalid or expired API key')) throw error;
-      if (error.message?.includes('Gemini API error')) {
-        lastError = error;
-        continue;
-      }
-      // Network error
-      lastError = new Error(`Network error: ${error.message}. Check your internet connection.`);
-      if (attempt < maxRetries) {
-        await new Promise(r => setTimeout(r, 1000));
-        continue;
-      }
-    }
-  }
-
-  throw lastError || new Error('Failed after retries');
-};
 
 // Fixed output format part of the system prompt
-const FIXED_OUTPUT_FORMAT = `
+export const FIXED_OUTPUT_FORMAT = `
 ### Output Format Instructions
 
 Please provide your LCSH recommendations in the following structured format:
@@ -102,7 +48,7 @@ Now calling the API to verify these terms…
 `;
 
 // MARC record generation prompt
-const MARC_RECORD_PROMPT = `
+export const MARC_RECORD_PROMPT = `
 You are a library cataloging expert specializing in MARC records for Library of Congress Subject Headings (LCSH) and Name Authority File (LCNAF).
 
 I will provide you with a list of validated terms along with their identifiers, similarity scores, and source authority.
@@ -142,29 +88,15 @@ const constructSystemPrompt = (userRules) => {
 };
 
 /**
- * Sends a request to the Gemini API to generate LCSH suggestions
- * @param {string} apiKey - The Gemini API key
+ * Builds the LCSH suggestion prompt (the same text the v1.1.0 Gemini call sent)
  * @param {object} bibliographicInfo - The bibliographic information
  * @param {string} systemPromptRules - The user-editable rules portion of the system prompt
- * @returns {Promise<object>} - The API response
+ * @returns {{system: string, userText: string}} - System prompt and user text
  */
-export const generateLcshSuggestions = async (apiKey, bibliographicInfo, systemPromptRules) => {
-  const systemPrompt = constructSystemPrompt(systemPromptRules);
-  
-  // Construct the request body
-  const requestBody = {
-    contents: [],
-    systemInstruction: { parts: [{ text: systemPrompt }] },
-    generationConfig: {
-      temperature: 0.2,
-      topK: 40,
-      topP: 0.95,
-      maxOutputTokens: 2048,
-    }
-  };
+export const buildSuggestionPrompt = (bibliographicInfo, systemPromptRules) => {
+  const system = constructSystemPrompt(systemPromptRules);
 
-  // Add text content
-  const textContent = `
+  const userText = `
 Please suggest Library of Congress Subject Headings (LCSH) for the following work:
 
 Title: ${bibliographicInfo.title || 'N/A'}
@@ -174,52 +106,24 @@ ${bibliographicInfo.tableOfContents ? `Table of Contents: ${bibliographicInfo.ta
 ${bibliographicInfo.notes ? `Additional Notes: ${bibliographicInfo.notes}` : ''}
   `;
 
-  // Create the user message parts
-  const parts = [{ text: textContent }];
-
-  // Add image parts if available
-  if (bibliographicInfo.images && bibliographicInfo.images.length > 0) {
-    bibliographicInfo.images.forEach(image => {
-      parts.push({
-        inlineData: {
-          mimeType: image.type,
-          data: image.data.split(',')[1] // Remove the data URL prefix
-        }
-      });
-    });
-  }
-
-  // Add the user message to the contents
-  requestBody.contents.push({
-    role: "user",
-    parts: parts
-  });
-
-  try {
-    const data = await callGeminiWithRetry(apiKey, requestBody);
-    return data;
-  } catch (error) {
-    console.error('Error generating LCSH suggestions:', error);
-    throw error;
-  }
+  return { system, userText };
 };
 
 /**
- * Generates MARC records for high-scoring best LOC matches
- * @param {string} apiKey - The Gemini API key
+ * Selects the recommendations that get a MARC record
  * @param {Array} recommendations - The recommendations with similarity scores and best matches
- * @returns {Promise<object>} - The API response with MARC records
+ * @returns {Array} - Recommendations with similarity > 30 and a best match
  */
-export const generateMarcRecords = async (apiKey, recommendations) => {
-  // Filter recommendations with similarity score > 30 and that have a best match
-  const highScoringTerms = recommendations.filter(rec => 
-    rec.similarity > 30 && rec.bestMatch
-  );
-  
-  if (highScoringTerms.length === 0) {
-    return { marcRecords: {} };
-  }
-  
+export const selectMarcEligible = (recommendations) => (recommendations || []).filter(rec =>
+  rec.similarity > 30 && rec.bestMatch
+);
+
+/**
+ * Builds the MARC generation prompt (the same text the v1.1.0 Gemini call sent)
+ * @param {Array} highScoringTerms - Result of selectMarcEligible()
+ * @returns {{system: string, userText: string}} - Empty system prompt and the user text
+ */
+export const buildMarcPrompt = (highScoringTerms) => {
   // Prepare the prompt with the high-scoring best matches
   const termsPrompt = highScoringTerms.map(rec =>
     `Term: ${rec.bestMatch.heading}
@@ -227,45 +131,20 @@ ID: ${rec.bestMatch.identifier || rec.apiId || 'N/A'}
 Source: ${(rec.bestMatch.source || 'lcsh').toUpperCase()}
 Similarity Score: ${rec.similarity}%
 `).join('\n');
-  
-  // Construct the request body
-  const requestBody = {
-    contents: [
-      {
-        role: "user",
-        parts: [{ 
-          text: `${MARC_RECORD_PROMPT}\n\nHere are the validated LCSH terms:\n\n${termsPrompt}` 
-        }]
-      }
-    ],
-    generationConfig: {
-      temperature: 0.1,
-      topK: 40,
-      topP: 0.95,
-      maxOutputTokens: 2048,
-    }
-  };
 
-  try {
-    const data = await callGeminiWithRetry(apiKey, requestBody);
-    
-    // Parse the response to extract MARC records
-    const marcRecords = parseMarcRecords(data, highScoringTerms);
-    
-    return { marcRecords };
-  } catch (error) {
-    console.error('Error generating MARC records:', error);
-    throw error;
-  }
+  return {
+    system: '',
+    userText: `${MARC_RECORD_PROMPT}\n\nHere are the validated LCSH terms:\n\n${termsPrompt}`
+  };
 };
 
 /**
- * Parse the Gemini API response to extract MARC records
- * @param {object} response - The Gemini API response
+ * Parse the Gemini-shaped response envelope to extract MARC records
+ * @param {object} response - `{candidates:[{content:{parts:[{text}]}}]}`
  * @param {Array} terms - The high-scoring terms with best matches
  * @returns {object} - Object mapping term to MARC record
  */
-const parseMarcRecords = (response, terms) => {
+export const parseMarcRecords = (response, terms) => {
   try {
     const content = response.candidates[0].content.parts[0].text;
     const marcRecords = {};
@@ -382,7 +261,9 @@ export const parseLcshSuggestions = (response) => {
 };
 
 export default {
-  generateLcshSuggestions,
+  buildSuggestionPrompt,
+  buildMarcPrompt,
+  selectMarcEligible,
   parseLcshSuggestions,
-  generateMarcRecords
-}; 
+  parseMarcRecords
+};

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
     CssBaseline,
@@ -10,8 +10,12 @@ import {
     Typography,
     Stepper,
     Step,
-    StepLabel
+    StepLabel,
+    Button,
+    Alert
 } from '@mui/material';
+import SettingsIcon from '@mui/icons-material/Settings';
+import SettingsPage from './components/SettingsPage';
 import { AppProvider } from './context/AppContext';
 import BibliographicInfoForm from './components/BibliographicInfoForm';
 import SystemPromptEditor from './components/SystemPromptEditor';
@@ -45,9 +49,36 @@ const steps = [
     'Conversation History'
 ];
 
+const SETTINGS_HASH = '#settings';
+
+// Track the location hash, so #settings opens the Settings screen
+const useHashRoute = () => {
+  const [hash, setHash] = useState(window.location.hash);
+
+  useEffect(() => {
+    const handleHashChange = () => setHash(window.location.hash);
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, []);
+
+  return hash;
+};
+
 // Main App component
 const App = () => {
-    const { activeStep } = useAppContext();
+    const { activeStep, settingsStatus, settingsError } = useAppContext();
+    const hash = useHashRoute();
+    const showSettings = hash === SETTINGS_HASH;
+
+    // Handle the header Settings button
+    const handleOpenSettings = () => {
+      window.location.hash = 'settings';
+    };
+
+    // Leave Settings and return to the workflow
+    const handleCloseSettings = () => {
+      window.location.hash = '';
+    };
 
     // Render the current step
     const renderStep = () => {
@@ -71,24 +102,45 @@ const App = () => {
         <Box sx={{ minHeight: '100vh', bgcolor: '#f5f5f5', py: 4 }}>
             <Container maxWidth="lg">
                 <Paper elevation={3} sx={{ p: 4 }}>
-                    <Typography variant="h4" component="h1" gutterBottom align="center">
+                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
+                      <Box sx={{ width: 120 }} />
+                      <Typography variant="h4" component="h1" align="center">
                         LCSH Recommendation Tool
-                    </Typography>
+                      </Typography>
+                      <Box sx={{ width: 120, display: 'flex', justifyContent: 'flex-end' }}>
+                        {!showSettings && (
+                          <Button variant="outlined" startIcon={<SettingsIcon />} onClick={handleOpenSettings}>
+                            Settings
+                          </Button>
+                        )}
+                      </Box>
+                    </Box>
 
-                    <Stepper activeStep={activeStep} alternativeLabel sx={{ mb: 4 }}>
-                        {steps.map((label) => (
-                            <Step key={label}>
-                                <StepLabel>{label}</StepLabel>
-                            </Step>
-                        ))}
-                    </Stepper>
+                    {settingsStatus === 'error' && (
+                      <Alert severity="error" sx={{ my: 2 }}>
+                        {settingsError}
+                      </Alert>
+                    )}
 
-                    <Box sx={{ mt: 2 }}>
-                        {renderStep()}
+                    {showSettings && <SettingsPage onClose={handleCloseSettings} />}
+
+                    {/* The workflow stays mounted while Settings is open, so no step loses its state */}
+                    <Box sx={{ display: showSettings ? 'none' : 'block' }}>
+                        <Stepper activeStep={activeStep} alternativeLabel sx={{ mb: 4, mt: 2 }}>
+                            {steps.map((label) => (
+                                <Step key={label}>
+                                    <StepLabel>{label}</StepLabel>
+                                </Step>
+                            ))}
+                        </Stepper>
+
+                        <Box sx={{ mt: 2 }}>
+                            {renderStep()}
+                        </Box>
                     </Box>
                 </Paper>
 
-                <Box sx={{ mt: 4 }}>
+                <Box sx={{ mt: 4, display: showSettings ? 'none' : 'block' }}>
                     <SystemPromptEditor />
                 </Box>
             </Container>

@@ -4,22 +4,45 @@ CHROME WEB STORE — PERMISSION JUSTIFICATIONS
 STORAGE PERMISSION
 ------------------
 
-The extension uses chrome.storage.local to store three things:
+The extension uses chrome.storage.local to store four things:
 
-1. Gemini API key — so users don't need to re-enter it each session
+1. The settings of each AI provider the user sets up (API key, model, region, server address) — so users don't need to re-enter them each session
 2. Conversation history — so users can revisit previous cataloging sessions
 3. System prompt settings — so users can customize the AI's behavior and keep those preferences between sessions
+4. A cached list of each provider's models — so the Settings screen can offer model names without asking the provider every time
 
-All data is stored locally in the user's browser. Nothing is sent to external servers beyond the necessary API calls to Google Gemini (for AI recommendations) and id.loc.gov (for LCSH/LCNAF authority validation). Users can clear all stored data through the extension's built-in history management options.
+All data is stored locally in the user's browser. API keys are sent only to the provider they belong to, in a request header. Nothing is sent to external servers beyond the necessary calls to the AI provider the user chose (for AI recommendations) and id.loc.gov (for LCSH/LCNAF authority validation). Users can clear all stored data through the extension's built-in history management options.
 
 
-HOST PERMISSIONS
-----------------
-
-The extension requires host permissions for two domains:
+HOST PERMISSIONS (REQUIRED)
+---------------------------
 
 1. id.loc.gov — To query the Library of Congress suggest2 API for validating AI-suggested terms against the official LCSH and LCNAF authority files. Each suggested heading is checked against id.loc.gov to confirm it is an authorized Library of Congress term.
 
-2. generativelanguage.googleapis.com — To connect to the Google Gemini API for generating LCSH candidate terms from bibliographic information (title, author, abstract, images, etc.). The user provides their own API key.
+2. generativelanguage.googleapis.com — To connect to the Google Gemini API, the default AI provider, for generating LCSH candidate terms from bibliographic information (title, author, abstract, images, etc.). The user provides their own API key.
 
-No other host permissions are requested. These two connections are the core of the extension's workflow: Gemini generates candidate headings, then id.loc.gov validates them.
+
+OPTIONAL HOST PERMISSIONS
+-------------------------
+
+The user chooses one AI provider in Settings. Chrome asks for access to a provider's address only when the user saves, tests or loads models for that provider, and only that one address is requested. Each optional origin is used only to send the user's own requests (with the user's own API key) to that provider:
+
+- https://api.openai.com/* — OpenAI (chat completions and the model list).
+- https://generativelanguage.googleapis.com/* — Google Gemini (content generation and the model list).
+- https://api.anthropic.com/* — Anthropic Claude (messages and the model list).
+- https://api.deepseek.com/* — DeepSeek (chat completions and the model list).
+- https://dashscope-intl.aliyuncs.com/* — Alibaba Qwen, international region (chat completions).
+- https://dashscope.aliyuncs.com/* — Alibaba Qwen, China region (chat completions).
+- https://api.z.ai/* — Z.ai GLM, international region (chat completions).
+- https://open.bigmodel.cn/* — Zhipu GLM, China region (chat completions).
+- https://api.moonshot.ai/* — Moonshot Kimi, international region (chat completions and the model list).
+- https://api.moonshot.cn/* — Moonshot Kimi, China region (chat completions and the model list).
+- https://api.minimax.io/* — MiniMax, international region (chat completions and the model list).
+- https://api.minimax.cn/* — MiniMax, China region (chat completions and the model list).
+- https://openrouter.ai/* — OpenRouter (chat completions and the model list, which also tells which models accept images and structured output).
+- http://localhost:1234/* — LM Studio's default local server address, for users who run a model on their own computer.
+- https://*/* — The "Custom (OpenAI-compatible)" provider: a server address the user types in Settings (for example a company or university AI gateway). Only https addresses are allowed, and Chrome asks for that one address when the user saves it.
+- http://localhost/* — A local AI server (LM Studio or another OpenAI-compatible server) on the user's own computer, on a port the user chooses. Plain http is allowed only for this host.
+- http://127.0.0.1/* — The same local AI server, reached by its loopback IP address instead of "localhost".
+
+Gemini Nano (Chrome's built-in on-device model) needs no host permission: it runs inside Chrome and sends nothing over the network.

@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
     Box,
     TextField,
@@ -16,7 +16,13 @@ import {
     CardActions
 } from '@mui/material';
 import { useAppContext } from '../context/AppContext';
-import { generateLcshSuggestions, parseLcshSuggestions } from '../services/geminiService';
+import {
+    legacyGenerateSuggestions,
+    parseLcshSuggestions,
+    describeActiveProvider,
+    onSettingsChanged,
+    logWorkflowError
+} from '../services/legacyBridge';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import DeleteIcon from '@mui/icons-material/Delete';
 import ImageIcon from '@mui/icons-material/Image';
@@ -26,9 +32,9 @@ const BibliographicInfoForm = () => {
         bibliographicInfo,
         setBibliographicInfo,
         systemPromptRules,
-        apiKey,
         setActiveStep,
         setInitialSuggestions,
+        setSuggestionProvenance,
         setIsLoading,
         isLoading,
         error,
@@ -36,7 +42,24 @@ const BibliographicInfoForm = () => {
     } = useAppContext();
 
     const [uploadedImages, setUploadedImages] = useState([]);
+    const [providerLabel, setProviderLabel] = useState('');
     const fileInputRef = useRef(null);
+
+    // Show which provider and model will be used; refresh when settings change
+    useEffect(() => {
+      let alive = true;
+      const refresh = () => {
+        describeActiveProvider()
+          .then((label) => { if (alive) setProviderLabel(label); })
+          .catch(() => { if (alive) setProviderLabel(''); });
+      };
+      refresh();
+      const unsubscribe = onSettingsChanged(refresh);
+      return () => {
+        alive = false;
+        unsubscribe();
+      };
+    }, []);
 
     // Handle form input changes
     const handleInputChange = (e) => {
@@ -155,9 +178,8 @@ const BibliographicInfoForm = () => {
                 images: imageData.map(({ name, type, size }) => ({ name, type, size }))
             });
 
-            // Generate LCSH suggestions using the Gemini API
-            const response = await generateLcshSuggestions(
-                apiKey,
+            // Generate LCSH suggestions with the active provider
+            const response = await legacyGenerateSuggestions(
                 enhancedBibliographicInfo,
                 systemPromptRules
             );
@@ -165,14 +187,15 @@ const BibliographicInfoForm = () => {
             // Parse the response
             const parsedSuggestions = parseLcshSuggestions(response);
 
-            // Store the suggestions in the context
+            // Store the suggestions and their provenance in the context
             setInitialSuggestions(parsedSuggestions);
+            setSuggestionProvenance(response.provenance);
 
             // Move to the next step
             setActiveStep(1);
         } catch (err) {
             setError(err.message || 'Failed to generate LCSH suggestions');
-            console.error('Error generating LCSH suggestions:', err);
+            logWorkflowError('Error generating LCSH suggestions:', err);
         } finally {
             setIsLoading(false);
         }
@@ -322,7 +345,12 @@ const BibliographicInfoForm = () => {
                 </Grid>
             </Grid>
 
-            <Box sx={{ mt: 3, display: 'flex', justifyContent: 'flex-end' }}>
+            <Box sx={{ mt: 3, display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 2 }}>
+                {providerLabel && (
+                  <Typography variant="body2" color="text.secondary">
+                    {providerLabel}
+                  </Typography>
+                )}
                 <Button
                     type="submit"
                     variant="contained"

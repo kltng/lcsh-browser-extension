@@ -45,6 +45,7 @@ const ConversationHistory = () => {
         setBibliographicInfo,
         setInitialSuggestions,
         setFinalRecommendations,
+        setSuggestionProvenance,
         error,
         setError
     } = useAppContext();
@@ -73,6 +74,7 @@ const ConversationHistory = () => {
         });
         setInitialSuggestions([]);
         setFinalRecommendations([]);
+        setSuggestionProvenance(null);
         setActiveStep(0);
     };
 
@@ -108,6 +110,11 @@ const ConversationHistory = () => {
             console.error('Error clearing conversation history:', err);
         }
     };
+
+    // Format a provenance field ({providerId, model} or null; missing in v1.1.0 entries)
+    const formatProvenance = (label, provenance) => (
+      provenance ? `${label}: ${provenance.providerId} (${provenance.model})` : ''
+    );
 
     // Format date
     const formatDate = (dateString) => {
@@ -250,6 +257,16 @@ const ConversationHistory = () => {
                                             {conversation.finalRecommendations.filter(rec => rec.similarity > 30 && rec.bestMatch).length} headings
                                         </Typography>
                                     </Grid>
+                                )}
+
+                                {(conversation.suggestionProvenance || conversation.marcProvenance) && (
+                                  <Grid item xs={12}>
+                                    <Typography variant="caption" color="text.secondary">
+                                      {formatProvenance('Suggestions', conversation.suggestionProvenance)}
+                                      {conversation.suggestionProvenance && conversation.marcProvenance ? ' · ' : ''}
+                                      {formatProvenance('MARC', conversation.marcProvenance)}
+                                    </Typography>
+                                  </Grid>
                                 )}
 
                                 {conversation.averageSimilarity !== undefined && (

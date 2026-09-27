@@ -14,11 +14,16 @@ import {
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { useAppContext } from '../context/AppContext';
 
+const STALE_RULES_MESSAGE = 'The rules were changed in another tab — reload them. Your text is kept until you reload.';
+
 const SystemPromptEditor = () => {
     const {
         systemPromptRules,
         setSystemPromptRules,
+        saveSystemPromptRules,
         resetSystemPromptRules,
+        reloadSystemPromptRules,
+        systemPromptStale,
         DEFAULT_SYSTEM_PROMPT_RULES
     } = useAppContext();
 
@@ -39,21 +44,26 @@ const SystemPromptEditor = () => {
 
     // Handle save
     const handleSave = () => {
-        // Save to Chrome storage
-        chrome.storage.local.set({ systemPromptRules }, () => {
-            if (chrome.runtime.lastError) {
-                showSnackbar(chrome.runtime.lastError.message || 'Failed to save system prompt rules', 'error');
-                return;
-            }
-
-            showSnackbar('System prompt rules saved successfully', 'success');
-        });
+      // Save to Chrome storage (through settings.js, key systemPromptRules, stale-base checked)
+      saveSystemPromptRules()
+        .then((result) => (result.saved
+          ? showSnackbar('System prompt rules saved successfully', 'success')
+          : showSnackbar(STALE_RULES_MESSAGE, 'warning')))
+        .catch(() => showSnackbar('Failed to save system prompt rules', 'error'));
     };
 
-    // Handle reset
+    // Handle reset (same stale rule as save)
     const handleReset = () => {
-        resetSystemPromptRules();
-        showSnackbar('System prompt rules reset to default', 'info');
+      resetSystemPromptRules()
+        .then((result) => (result.saved
+          ? showSnackbar('System prompt rules reset to default', 'info')
+          : showSnackbar(STALE_RULES_MESSAGE, 'warning')))
+        .catch(() => showSnackbar('Failed to reset system prompt rules', 'error'));
+    };
+
+    // Handle reload after a change in another tab
+    const handleReload = () => {
+      reloadSystemPromptRules().catch(() => showSnackbar('Failed to load system prompt rules', 'error'));
     };
 
     // Show snackbar
@@ -83,6 +93,16 @@ const SystemPromptEditor = () => {
                         These rules guide the AI in selecting appropriate Library of Congress Subject Headings.
                         Edit them to customize the behavior of the recommendation system.
                     </Typography>
+
+                    {systemPromptStale && (
+                      <Alert
+                        severity="warning"
+                        sx={{ mb: 2 }}
+                        action={<Button color="inherit" size="small" onClick={handleReload}>Reload</Button>}
+                      >
+                        {STALE_RULES_MESSAGE}
+                      </Alert>
+                    )}
 
                     <TextField
                         fullWidth
