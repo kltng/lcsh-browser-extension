@@ -12,7 +12,7 @@ LCSH Recommendation Tool
 > Suggests Library of Congress Subject Headings, checks every one against the
 > real authority file, and builds the MARC field.
 
-(129 characters.)
+(123 characters.)
 
 ## Detailed description
 
