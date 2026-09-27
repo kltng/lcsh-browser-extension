@@ -1,0 +1,186 @@
+{
+ "_source": "Lead-written for SPEC-P4 §2.1 NORMALIZE_V1; cross-checked 45/45 identical between a Python and a JavaScript implementation (2026-09-27). The coder must not edit this file.",
+ "version": "NORMALIZE_V1",
+ "cases": [
+  {
+   "input": "Cats",
+   "expected": "cats"
+  },
+  {
+   "input": "CATS",
+   "expected": "cats"
+  },
+  {
+   "input": "Cats.",
+   "expected": "cats"
+  },
+  {
+   "input": "Cats...",
+   "expected": "cats"
+  },
+  {
+   "input": "Cats. ",
+   "expected": "cats"
+  },
+  {
+   "input": "  Cats  ",
+   "expected": "cats"
+  },
+  {
+   "input": "Cats and dogs",
+   "expected": "cats and dogs"
+  },
+  {
+   "input": "Cats\tand\ndogs",
+   "expected": "cats and dogs"
+  },
+  {
+   "input": "Cats　and dogs",
+   "expected": "cats and dogs"
+  },
+  {
+   "input": "Motion pictures--Japan--History",
+   "expected": "motion pictures--japan--history"
+  },
+  {
+   "input": "Motion pictures -- Japan -- History",
+   "expected": "motion pictures--japan--history"
+  },
+  {
+   "input": "Motion pictures — Japan — History",
+   "expected": "motion pictures--japan--history"
+  },
+  {
+   "input": "Motion pictures–Japan–History",
+   "expected": "motion pictures--japan--history"
+  },
+  {
+   "input": "Motion pictures—Japan",
+   "expected": "motion pictures--japan"
+  },
+  {
+   "input": "China--History--Ming dynasty, 1368-1644",
+   "expected": "china--history--ming dynasty, 1368-1644"
+  },
+  {
+   "input": "CHINA -- HISTORY -- MING DYNASTY, 1368-1644",
+   "expected": "china--history--ming dynasty, 1368-1644"
+  },
+  {
+   "input": "Kurosawa, Akira, 1910-1998",
+   "expected": "kurosawa, akira, 1910-1998"
+  },
+  {
+   "input": "Shakespeare, William, 1564-1616. Hamlet",
+   "expected": "shakespeare, william, 1564-1616. hamlet"
+  },
+  {
+   "input": "Bible. English",
+   "expected": "bible. english"
+  },
+  {
+   "input": "Smith, John, Jr.",
+   "expected": "smith, john, jr"
+  },
+  {
+   "input": "Québec (Province)--History",
+   "expected": "québec (province)--history"
+  },
+  {
+   "input": "Québec (Province)",
+   "expected": "québec (province)"
+  },
+  {
+   "input": "Zürich (Switzerland)",
+   "expected": "zürich (switzerland)"
+  },
+  {
+   "input": "Zürich (Switzerland)",
+   "expected": "zürich (switzerland)"
+  },
+  {
+   "input": "毛泽东, 1893-1976",
+   "expected": "毛泽东, 1893-1976"
+  },
+  {
+   "input": "日本電影人物志",
+   "expected": "日本電影人物志"
+  },
+  {
+   "input": "東京 (日本)",
+   "expected": "東京 (日本)"
+  },
+  {
+   "input": "Hà Giang (Vietnam : Province)",
+   "expected": "hà giang (vietnam : province)"
+  },
+  {
+   "input": "Cục thống kê Hà Giang",
+   "expected": "cục thống kê hà giang"
+  },
+  {
+   "input": "ΟΔΥΣΣΕΥΣ",
+   "expected": "οδυσσευς"
+  },
+  {
+   "input": "Straße",
+   "expected": "straße"
+  },
+  {
+   "input": "STRASSE",
+   "expected": "strasse"
+  },
+  {
+   "input": "İstanbul (Turkey)",
+   "expected": "i̇stanbul (turkey)"
+  },
+  {
+   "input": "Ñandú",
+   "expected": "ñandú"
+  },
+  {
+   "input": "Øresund",
+   "expected": "øresund"
+  },
+  {
+   "input": "Arabic language--Grammar",
+   "expected": "arabic language--grammar"
+  },
+  {
+   "input": "العربية",
+   "expected": "العربية"
+  },
+  {
+   "input": "עברית",
+   "expected": "עברית"
+  },
+  {
+   "input": "Russia (Federation)--Politics and government--1991-",
+   "expected": "russia (federation)--politics and government--1991-"
+  },
+  {
+   "input": "Россия",
+   "expected": "россия"
+  },
+  {
+   "input": "Rock music--1961-1970",
+   "expected": "rock music--1961-1970"
+  },
+  {
+   "input": "  --History",
+   "expected": "--history"
+  },
+  {
+   "input": "Cats--",
+   "expected": "cats--"
+  },
+  {
+   "input": "a b c",
+   "expected": "a b c"
+  },
+  {
+   "input": "x y",
+   "expected": "x y"
+  }
+ ]
+}

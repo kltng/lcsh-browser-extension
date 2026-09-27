@@ -1,0 +1,187 @@
+{
+ "_source": "Lead-written from LIVE suggest2 data (docs/evidence/loc_suggest2_marckeys_2026-09-27.md) and SPEC-P4 §6. The coder must not edit this file.",
+ "cases": [
+  {
+   "authority": "lcsh",
+   "label": "China--History--Ming dynasty, 1368-1644",
+   "marcKey": "151  $aChina$xHistory$yMing dynasty, 1368-1644",
+   "expectStatus": "from-authority",
+   "expectText": "651 _0 $a China $x History $y Ming dynasty, 1368-1644"
+  },
+  {
+   "authority": "lcsh",
+   "label": "Motion picture actors and actresses--Japan--Biography",
+   "marcKey": "150  $aMotion picture actors and actresses$zJapan$vBiography",
+   "expectStatus": "from-authority",
+   "expectText": "650 _0 $a Motion picture actors and actresses $z Japan $v Biography"
+  },
+  {
+   "authority": "lcsh",
+   "label": "Cats",
+   "marcKey": "150 0$aCats",
+   "expectStatus": "from-authority",
+   "expectText": "650 _0 $a Cats"
+  },
+  {
+   "authority": "lcnaf",
+   "label": "Kurosawa, Akira, 1910-1998",
+   "marcKey": "1001 $aKurosawa, Akira,$d1910-1998",
+   "expectStatus": "from-authority",
+   "expectText": "600 10 $a Kurosawa, Akira, $d 1910-1998"
+  },
+  {
+   "authority": "lcnaf",
+   "label": "Harvard University",
+   "marcKey": "1102 $aHarvard University",
+   "expectStatus": "from-authority",
+   "expectText": "610 20 $a Harvard University"
+  },
+  {
+   "authority": "lcnaf",
+   "label": "Japan",
+   "marcKey": "151  $aJapan",
+   "expectStatus": "from-authority",
+   "expectText": "651 _0 $a Japan"
+  },
+  {
+   "authority": "lcgft",
+   "label": "Biographical films",
+   "marcKey": "155  $aBiographical films",
+   "expectStatus": "from-authority",
+   "expectText": "655 _7 $a Biographical films $2 lcgft"
+  },
+  {
+   "authority": "lcsh",
+   "label": "World War, 1939-1945--Personal narratives, Japanese",
+   "marcKey": "150  $aWorld War, 1939-1945$vPersonal narratives, Japanese",
+   "expectStatus": "from-authority",
+   "expectText": "650 _0 $a World War, 1939-1945 $v Personal narratives, Japanese"
+  },
+  {
+   "authority": "lcsh",
+   "label": "Motion pictures--Japan--History",
+   "marcKey": "150  $aMotion pictures$zJapan$xHistory",
+   "expectStatus": "from-authority",
+   "expectText": "650 _0 $a Motion pictures $z Japan $x History"
+  },
+  {
+   "authority": "lcnaf",
+   "label": "Bible. English",
+   "marcKey": "130 0$aBible.$lEnglish",
+   "expectStatus": "from-authority",
+   "expectText": "630 00 $a Bible. $l English"
+  },
+  {
+   "authority": "lcsh",
+   "label": "Bible--Criticism, interpretation, etc.",
+   "marcKey": "130 0$aBible$xCriticism, interpretation, etc.",
+   "expectStatus": "from-authority",
+   "expectText": "630 00 $a Bible $x Criticism, interpretation, etc."
+  },
+  {
+   "authority": "lcnaf",
+   "label": "Vatican Council (2nd : 1962-1965 : Basilica di San Pietro in Vaticano)",
+   "marcKey": "1112 $aVatican Council$n(2nd :$d1962-1965 :$cBasilica di San Pietro in Vaticano)",
+   "expectStatus": "from-authority",
+   "expectText": "611 20 $a Vatican Council $n (2nd : $d 1962-1965 : $c Basilica di San Pietro in Vaticano)"
+  },
+  {
+   "authority": "lcnaf",
+   "label": "Shakespeare, William, 1564-1616. Hamlet",
+   "marcKey": "1001 $aShakespeare, William,$d1564-1616.$tHamlet",
+   "expectStatus": "from-authority",
+   "expectText": "600 10 $a Shakespeare, William, $d 1564-1616. $t Hamlet"
+  },
+  {
+   "authority": "lcnaf",
+   "label": "Kesha, 1987-",
+   "marcKey": "1000 $aKesha,$d1987-",
+   "expectStatus": "from-authority",
+   "expectText": "600 00 $a Kesha, $d 1987-"
+  },
+  {
+   "authority": "lcsh",
+   "label": "Dollar, American (Coin)",
+   "marcKey": "150 0$aDollar, American (Coin)",
+   "expectStatus": "from-authority",
+   "expectText": "650 _0 $a Dollar, American (Coin)"
+  },
+  {
+   "authority": "lcsh",
+   "label": "Japan--History",
+   "marcKey": "151 0$aJapan$xHistory",
+   "expectStatus": "from-authority",
+   "expectText": "651 _0 $a Japan $x History"
+  },
+  {
+   "authority": "lcsh",
+   "label": "Total $100 value",
+   "marcKey": "150  $aTotal $100 value",
+   "expectStatus": "unavailable",
+   "expectReason": "key does not match label"
+  },
+  {
+   "authority": "lcsh",
+   "label": "Cats",
+   "marcKey": "150  $a",
+   "expectStatus": "unavailable",
+   "expectReason": "unparseable key"
+  },
+  {
+   "authority": "lcsh",
+   "label": "Cats",
+   "marcKey": "150  aCats",
+   "expectStatus": "unavailable",
+   "expectReason": "unparseable key"
+  },
+  {
+   "authority": "lcsh",
+   "label": "Cats",
+   "marcKey": "150",
+   "expectStatus": "unavailable",
+   "expectReason": "unparseable key"
+  },
+  {
+   "authority": "lcsh",
+   "label": "Japan",
+   "marcKey": "181  $zJapan",
+   "expectStatus": "unavailable",
+   "expectReason": "unsupported tag"
+  },
+  {
+   "authority": "lcsh",
+   "label": "1990s",
+   "marcKey": "148  $a1990s",
+   "expectStatus": "unavailable",
+   "expectReason": "unsupported tag"
+  },
+  {
+   "authority": "lcnaf",
+   "label": "Smith, John",
+   "marcKey": "100x $aSmith, John",
+   "expectStatus": "unavailable",
+   "expectReason": "bad indicator"
+  },
+  {
+   "authority": "lcnaf",
+   "label": "Bible. English",
+   "marcKey": "130  $aBible.$lEnglish",
+   "expectStatus": "unavailable",
+   "expectReason": "bad indicator"
+  },
+  {
+   "authority": "lcsh",
+   "label": "Dogs",
+   "marcKey": "150  $aCats",
+   "expectStatus": "unavailable",
+   "expectReason": "key does not match label"
+  },
+  {
+   "authority": "lcsh",
+   "label": "Cats",
+   "marcKey": null,
+   "expectStatus": "unavailable",
+   "expectReason": "no key"
+  }
+ ]
+}
