@@ -45,3 +45,25 @@ Each rule names a defect CLASS and how to detect it.
 12. **Every cleanup in `finally`.** Sessions, locks, object URLs and
     AbortControllers are released on success, error AND cancel. Detect:
     `create(`/`request(` without a matching `finally`.
+
+## Rules from fixed findings (P4 code reviews and P5 spec reviews, 2026-09-27)
+
+13. **Operation identity comes first.** An async operation reserves its
+    token/revision and AbortController SYNCHRONOUSLY, before its first
+    `await`. After every `await` it checks that it is still current, and it
+    checks once more immediately before any commit (state write, storage
+    write, file deletion), with no `await` in between. Detection: any
+    `await` between "check current" and "commit".
+14. **Every change invalidates what depends on it.** When an input changes
+    (a retry, a new choice, a new run, a new installation), every result
+    derived from the old input is invalidated or regenerated in the same
+    transition. Detection: a state transition that changes an input but
+    does not touch its dependents.
+15. **Verify what you will use, not what you sent.** Hashes/counts of a
+    stream prove the stream, not the stored copy; verify the bytes that will
+    later be read. Detection: an integrity claim about data at rest that was
+    computed only in flight.
+16. **Contracts are copied, never paraphrased.** Queries, normalization, MARC
+    parsing and similar shared contracts are reproduced byte-for-byte from
+    the lead-owned source and pinned by a test (sha256 or the shared
+    vectors). Lead-owned fixtures are never edited by the coder.

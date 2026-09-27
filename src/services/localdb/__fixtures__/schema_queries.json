@@ -1,0 +1,30 @@
+{
+ "_source": "LEAD-OWNED (SPEC-P5 §12 row 1). The exact SQL of lcsh-db-builder docs/SCHEMA_QUERIES.md v2 (sha256 of that file below), per query, with placeholders (:authorities) and <authority order> kept verbatim. sql.js must reproduce each text byte for byte before substitution. The coder must not edit this file.",
+ "schema_queries_sha256": "7e83c1812946a3f700e6c2fea8cdb4adfd57b2ab81eb5890384a90b8da408d8e",
+ "queries": {
+  "Q1": {
+   "sql": "SELECT id, uri, authority, label, label_normalized, deprecated, marc_key, scope_note\nFROM auth\nWHERE label_normalized = ?1\n  AND authority IN (:authorities)\nORDER BY deprecated ASC, <authority order>, uri ASC\nLIMIT 20;",
+   "sha256": "eeb9c2f8748aac04e3e1a23001aa805404cf3614abc5ff8731da005cf1469b23"
+  },
+  "Q2": {
+   "sql": "SELECT a.id, a.uri, a.authority, a.label, a.label_normalized, a.deprecated, a.marc_key, a.scope_note\nFROM auth a\nWHERE a.id IN (SELECT l.auth_id FROM alt_label l WHERE l.label_normalized = ?1)\n  AND a.authority IN (:authorities)\nORDER BY a.deprecated ASC, <authority order>, a.uri ASC\nLIMIT 20;",
+   "sha256": "39ecf89e4ec9d77cb9ce035fd99bd4e4159e289048964d4e514ba7c31d5ed1fe"
+  },
+  "Q3a": {
+   "sql": "-- Q3a preferred\nSELECT a.id, a.uri, a.authority, a.label, a.label_normalized, a.deprecated, a.marc_key, a.scope_note,\n       bm25(auth_fts) AS score\nFROM auth_fts JOIN auth a ON a.id = auth_fts.rowid\nWHERE auth_fts MATCH ?1\n  AND a.authority IN (:authorities)\nORDER BY score ASC, a.deprecated ASC, a.uri ASC\nLIMIT 30;",
+   "sha256": "5515fdef936627a5eed773ea326e05aac0ca4459595a167c7ce02c4253e65e8d"
+  },
+  "Q3b": {
+   "sql": "-- Q3b variants (bm25 cannot be used inside an aggregate: score in a subquery first; this form tested on 468k LCSH records 2026-09-27: no table scans, <= 5.5 ms)\nSELECT a.id, a.uri, a.authority, a.label, a.label_normalized, a.deprecated, a.marc_key, a.scope_note,\n       min(s.score) AS score\nFROM (SELECT l2.id AS lid, bm25(alt_label_fts) AS score\n      FROM alt_label_fts\n      JOIN alt_label l2 ON l2.id = alt_label_fts.rowid\n      JOIN auth a2 ON a2.id = l2.auth_id\n      WHERE alt_label_fts MATCH ?1\n      ORDER BY score, a2.authority, a2.uri, l2.label, l2.lang, l2.kind\n      LIMIT 500) s\nJOIN alt_label l ON l.id = s.lid\nJOIN auth a ON a.id = l.auth_id\nWHERE a.authority IN (:authorities)\nGROUP BY a.id\nORDER BY score ASC, a.deprecated ASC, a.uri ASC\nLIMIT 30;",
+   "sha256": "e20e9a1aa8de846b984bf296817fb3101135a2efe4558ff0fefe0a31a33c79f1"
+  },
+  "Q4": {
+   "sql": "SELECT h.target_authority, h.target_uri,\n       t.id, t.uri, t.authority, t.label, t.label_normalized, t.deprecated, t.marc_key, t.scope_note\nFROM hierarchy h\nLEFT JOIN auth t ON t.uri = h.target_uri AND t.authority = h.target_authority\nWHERE h.auth_id = ?1 AND h.rel = 'use'\nORDER BY h.target_authority, h.target_uri;",
+   "sha256": "2188eac4b90158de819e011f79d27564effb5d4150eee95e382cea4c1088de70"
+  },
+  "Q5": {
+   "sql": "SELECT h.rel, h.target_authority, h.target_uri, t.label\nFROM hierarchy h\nLEFT JOIN auth t ON t.uri = h.target_uri AND t.authority = h.target_authority\nWHERE h.auth_id = ?1 AND h.rel IN ('broader','narrower','related','see_also')\nORDER BY h.rel, t.label, h.target_uri\nLIMIT 200;",
+   "sha256": "de9be42a8602fe4298fbe333a2965cf30d8762c85c0ff19bf6e8550ce259b467"
+  }
+ }
+}
