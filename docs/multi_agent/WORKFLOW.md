@@ -14,7 +14,7 @@ Plan: `docs/multi_agent/PLAN.md`.
 | Tech lead | this Claude session | the session's own model | — |
 | Coder | `claude -p` | `opus` (alias) | `CLAUDE_CONFIG_DIR=$HOME/.claude-work claude -p "Read and follow the instructions in <ABS prompt path>" --model opus --permission-mode acceptEdits --allowedTools <list> --output-format json < /dev/null > <result.json>` |
 | Backup coder | `claude -p` | `opus` (alias) | same, but with `CLAUDE_CONFIG_DIR=$HOME/.claude` set explicitly (account B) |
-| Strict reviewer | `codex exec` 0.155.1 | `gpt-6-astra`, reasoning medium | `codex exec --sandbox read-only --ignore-user-config --disable apps --disable browser_use --disable computer_use --disable image_generation -m gpt-6-astra -c model_reasoning_effort="medium" -C <repo> -o <last_message.md> - < <prompt.md> > <output.log> 2>&1` |
+| Strict reviewer | `codex exec` 0.157.1 (npm `@openai/codex`; the brew formula is stale at 0.46.0 and cannot run the model) | `gpt-6-astra`, reasoning medium | `codex exec --sandbox read-only --ignore-user-config --disable apps --disable browser_use --disable computer_use --disable image_generation -m gpt-6-astra -c model_reasoning_effort="medium" -C <repo> -o <last_message.md> - < <prompt.md> > <output.log> 2>&1` |
 | QC | lead-run scripts | — | — |
 
 Account trap: with `CLAUDE_CONFIG_DIR` unset, `claude` is the account A
@@ -108,3 +108,24 @@ tests) → live pass in Chrome → commit + push at the phase gate.
 
 `docs/multi_agent/JOURNAL.md`: same-day entries, committed with the work.
 At the project end: sweep for unfiled skill field reports.
+
+## Environment re-check (2026-09-27, after a harness restart)
+
+- The coder model id stopped resolving; roles are pinned to the `opus` ALIAS
+  now. A wrong id gives a 0-turn, 0-cost `--output-format json` result that
+  looks like an instant success: check `num_turns` and `stderr` after every
+  dispatch.
+- `codex` was replaced by an old Homebrew build (0.46.0) that cannot run the
+  reviewer model at all, and had lost `--ignore-user-config`. Owner approved
+  the upgrade: `brew unlink codex && npm i -g @openai/codex@latest` →
+  0.157.1 (roll back with `npm rm -g @openai/codex && brew link codex`).
+- **Credential blast radius, re-verified:** the user's `~/.codex/config.toml`
+  defines 9 MCP servers, several with `http_headers`/`env` secrets plus a
+  `node_repl`. Without isolation a dispatched review DOES start them (seen in
+  the logs). Cure, re-verified after the upgrade: `--ignore-user-config`
+  (0 MCP connections, 0 `mcp__` tools). If that flag ever disappears again,
+  `-c mcp_servers='{}'` was measured to work as well. Every review dispatch
+  greps its own log for `rmcp::transport|MCP client` afterwards.
+- Large build inputs and reference databases must NOT live in `/tmp`: a
+  restart wiped 2.9 GB of LOC sources and every reference database. They now
+  live under `~/work/_data/lcsh/`.
