@@ -11,9 +11,9 @@ Plan: `docs/multi_agent/PLAN.md`.
 
 | Role | Agent/CLI | Model | Invocation (smoke-tested 2026-09-26) |
 |---|---|---|---|
-| Tech lead | this Claude session (account A account) | Opus 5.5 | — |
-| Coder | `claude -p` | `claude-opus-5-5` | `CLAUDE_CONFIG_DIR=$HOME/.claude-work claude -p "Read and follow the instructions in <ABS prompt path>" --model claude-opus-5-5 --permission-mode acceptEdits --allowedTools <list> --output-format json < /dev/null > <result.json>` |
-| Backup coder | `claude -p` | `claude-opus-5-5` | same, but with `CLAUDE_CONFIG_DIR=$HOME/.claude` set explicitly (account B) |
+| Tech lead | this Claude session | the session's own model | — |
+| Coder | `claude -p` | `opus` (alias) | `CLAUDE_CONFIG_DIR=$HOME/.claude-work claude -p "Read and follow the instructions in <ABS prompt path>" --model opus --permission-mode acceptEdits --allowedTools <list> --output-format json < /dev/null > <result.json>` |
+| Backup coder | `claude -p` | `opus` (alias) | same, but with `CLAUDE_CONFIG_DIR=$HOME/.claude` set explicitly (account B) |
 | Strict reviewer | `codex exec` 0.155.1 | `gpt-6-astra`, reasoning medium | `codex exec --sandbox read-only --ignore-user-config --disable apps --disable browser_use --disable computer_use --disable image_generation -m gpt-6-astra -c model_reasoning_effort="medium" -C <repo> -o <last_message.md> - < <prompt.md> > <output.log> 2>&1` |
 | QC | lead-run scripts | — | — |
 
@@ -29,7 +29,7 @@ as the coder), so its reviews are flagged and get a codex spot-check later.
 
 - **Coder, both accounts:** PASS on writing files, `npm run build` (exit 0),
   `git status`, and network (id.loc.gov 200). `modelUsage` confirms
-  `claude-opus-5-5` (plus the CLI's internal haiku helper). No managed
+  the opus alias (plus the CLI's internal haiku helper). No managed
   permission rules on the account A account. The `--allowedTools` patterns
   match the WHOLE command: `Bash(npm run build)` denies
   `npm run build > log 2>&1; tail`. List the exact commands a phase needs,
