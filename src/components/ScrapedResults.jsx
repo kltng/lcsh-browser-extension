@@ -1,33 +1,40 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Box, Typography, Button, Chip, Alert, Card, CardContent, Link, CircularProgress, Stack
 } from '@mui/material';
 import { useAppContext } from '../context/AppContext';
 import { selectionsOf } from '../services/pipeline/run';
 import { FALLBACK_BANNER } from '../services/pipeline/select';
-import { outcomeLine, choiceText, authorityLabel, lcLink } from './pipelineText';
+import { fallbackNotice } from '../services/lookup/index';
+import { getSettings } from '../services/settings';
+import { outcomeLine, choiceText, authorityLabel, lcLink, sourceLine, viaNote, replacementNoteText } from './pipelineText';
 
 /**
- * One candidate row: label, authority badge, LC link, match class, and the "Use this heading" control.
+ * One candidate row: label, authority badge, LC link, match class, how the
+ * record was reached (SPEC-P5 §8), and the "Use this heading" control.
  * @param {{candidate:object, chosen:boolean, similarity:number|null, readOnly:boolean, onUse:Function}} props - Candidate and state
  * @returns {JSX.Element}
  */
-const CandidateRow = ({ candidate, chosen, similarity, readOnly, onUse }) => (
-  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 0.5, flexWrap: 'wrap', bgcolor: chosen ? 'rgba(25,118,210,0.08)' : 'transparent' }}>
-    <Typography variant="body2" sx={{ fontWeight: chosen ? 'bold' : 'normal' }}>{candidate.label}</Typography>
-    <Chip size="small" label={authorityLabel(candidate.authority)} />
-    <Link href={lcLink(candidate.uri)} target="_blank" rel="noopener noreferrer" variant="caption">
-      LC record {candidate.localId}
-    </Link>
-    <Chip size="small" variant="outlined" label={candidate.matchClass} />
-    {chosen && similarity !== null && (
-      <Typography variant="caption" color="text.secondary">{similarity}% similar spelling</Typography>
-    )}
-    {!readOnly && !chosen && (
-      <Button size="small" onClick={() => onUse(candidate.cid)}>Use this heading</Button>
-    )}
-  </Box>
-);
+const CandidateRow = ({ candidate, chosen, similarity, readOnly, onUse }) => {
+  const note = viaNote(candidate);
+  return (
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 0.5, flexWrap: 'wrap', bgcolor: chosen ? 'rgba(25,118,210,0.08)' : 'transparent' }}>
+      <Typography variant="body2" sx={{ fontWeight: chosen ? 'bold' : 'normal' }}>{candidate.label}</Typography>
+      <Chip size="small" label={authorityLabel(candidate.authority)} />
+      <Link href={lcLink(candidate.uri)} target="_blank" rel="noopener noreferrer" variant="caption">
+        LC record {candidate.localId}
+      </Link>
+      <Chip size="small" variant="outlined" label={candidate.matchClass} />
+      {note && <Typography variant="caption" color="text.secondary">{note}</Typography>}
+      {chosen && similarity !== null && (
+        <Typography variant="caption" color="text.secondary">{similarity}% similar spelling</Typography>
+      )}
+      {!readOnly && !chosen && (
+        <Button size="small" onClick={() => onUse(candidate.cid)}>Use this heading</Button>
+      )}
+    </Box>
+  );
+};
 
 /**
  * Step 3 content, per suggestion (also used read-only by history).
@@ -58,6 +65,16 @@ export const MatchesPanel = ({
                 <Button size="small" variant="outlined" onClick={() => onRetry(s.id)}>Retry lookup</Button>
               )}
             </Box>
+            {result && (
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
+                Source: {sourceLine(result.provenance)}
+              </Typography>
+            )}
+            {(result?.replacementNotes || []).map((note) => (
+              <Alert key={`${note.fromLocalId}-${note.targetLocalId}`} severity="info" sx={{ mb: 1 }}>
+                {replacementNoteText(note)}
+              </Alert>
+            ))}
             {candidates.map((c) => (
               <CandidateRow
                 key={c.cid}
@@ -89,12 +106,21 @@ export const MatchesPanel = ({
 );
 
 const ScrapedResults = () => {
-  const { run, workflow, setActiveStep } = useAppContext();
+  const { run, workflow, setActiveStep, localDbClient } = useAppContext();
+  const [notice, setNotice] = useState(null);
   const suggestions = run.suggest?.suggestions || [];
   const selections = selectionsOf(run);
   const lookingUp = Object.keys(run.lookup.pending).length > 0;
   const selecting = run.select.pending;
   const canBuild = run.run.stage === 'selected' || run.run.stage === 'built';
+
+  useEffect(() => {
+    let alive = true;
+    getSettings()
+      .then((settings) => alive && setNotice(fallbackNotice(settings, localDbClient)))
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [localDbClient, run.run.runId]);
 
   const handleSettings = () => { window.location.hash = 'settings'; };
   const handleBuild = () => {
@@ -105,6 +131,8 @@ const ScrapedResults = () => {
   return (
     <Box>
       <Typography variant="h6" gutterBottom>Matches</Typography>
+      {/* A backend fallback is never silent (HOUSE_RULES 10). */}
+      {notice && <Alert severity="info" sx={{ mb: 2 }}>{notice}</Alert>}
       {run.select.mode === 'exact-fallback' && <Alert severity="warning" sx={{ mb: 2 }}>{FALLBACK_BANNER}</Alert>}
       {run.select.error && (
         <Alert severity="error" sx={{ mb: 2 }}>

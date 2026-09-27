@@ -9,6 +9,7 @@
 import { PROVIDERS } from './providers/registry';
 import { allModelMetaKeys } from './providers/capabilities';
 import { OLD_DEFAULT_RULES } from './pipeline/legacyRules';
+import { validateLocalDbSnapshot, isValidRecord } from './localdb/record';
 
 export const SETTINGS_VERSION = 2;
 export const DEFAULT_PROVIDER_ID = 'gemini';
@@ -23,8 +24,14 @@ const LEGACY_KEY = 'geminiApiKey';
  */
 export const providerKey = (id) => `provider:${id}`;
 
+export const LOOKUP_BACKENDS = ['loc-api', 'local-db'];
+/** Keys of the local database (SPEC-P5 §2). `localDb` changes ONLY at a §4.5 or §4.7 commit. */
+export const LOCAL_DB_KEYS = ['localDb', 'localDbPendingDeletes', 'localDbUpdateCheck'];
+/** The patch fields the §3.3 bridge accepts; everything else is preserved. */
+export const LOCAL_DB_PATCH_KEYS = ['localDb', 'lookupBackend', 'pendingDeletesAdd', 'pendingDeletesRemove'];
+
 const PROVIDER_IDS = new Set(PROVIDERS.map((p) => p.id));
-const FIXED_KEYS = ['settingsVersion', 'activeProviderId', 'systemPromptRules', 'lookupBackend'];
+const FIXED_KEYS = ['settingsVersion', 'activeProviderId', 'systemPromptRules', 'lookupBackend', ...LOCAL_DB_KEYS];
 
 const storage = () => chrome.storage.local;
 const withLock = (fn) => navigator.locks.request(LOCK_NAME, { mode: 'exclusive' }, fn);
@@ -138,8 +145,111 @@ export const getSettings = async () => {
     providers,
     modelMeta,
     systemPromptRules: typeof all.systemPromptRules === 'string' ? all.systemPromptRules : null,
-    lookupBackend: all.lookupBackend || DEFAULT_LOOKUP_BACKEND
+    lookupBackend: LOOKUP_BACKENDS.includes(all.lookupBackend) ? all.lookupBackend : DEFAULT_LOOKUP_BACKEND,
+    // An incomplete record is NOT an installation: the lookup and the UI must
+    // never build an installation identity or a file name out of it.
+    localDb: isValidRecord(all.localDb) ? all.localDb : null,
+    localDbInvalid: all.localDb !== undefined && all.localDb !== null && !isValidRecord(all.localDb),
+    localDbPendingDeletes: Array.isArray(all.localDbPendingDeletes) ? all.localDbPendingDeletes : [],
+    localDbUpdateCheck: all.localDbUpdateCheck ?? null
   };
+};
+
+/**
+ * The local-database settings, read under the lock (SPEC-P5 §3.3 `read`).
+ * `valid` reports whether the COMPLETE snapshot passes §2 validation; the
+ * installer must not open or delete anything when it is false (§3.4 step 2).
+ * The raw values are returned unchanged, so nothing is silently repaired.
+ * @returns {Promise<{lookupBackend:string, localDb:object|null, localDbPendingDeletes:any, valid:boolean, invalidReason:string|null}>}
+ */
+export const readLocalDbSettings = async () => {
+  await ready();
+  return withLock(async () => {
+    const all = await storage().get(['lookupBackend', 'localDb', 'localDbPendingDeletes']);
+    const snapshot = {
+      lookupBackend: LOOKUP_BACKENDS.includes(all.lookupBackend) ? all.lookupBackend : DEFAULT_LOOKUP_BACKEND,
+      localDb: all.localDb ?? null,
+      localDbPendingDeletes: all.localDbPendingDeletes === undefined ? [] : all.localDbPendingDeletes
+    };
+    const { valid, reason } = validateLocalDbSnapshot(snapshot);
+    return { ...snapshot, valid, invalidReason: reason };
+  });
+};
+
+/**
+ * The commit of the §3.3 bridge, under the `'lcsh-settings'` lock:
+ * (2) reread, (3) compare `expectedLocalDb` STRUCTURALLY with the fresh value,
+ * (4) run `fence()` immediately before the write with NO await in between
+ * (HOUSE_RULES 13), (5) apply the allowlisted patch and write.
+ * @param {{expectedLocalDb:object|null, patch:object, fence?:()=>boolean}} args - Expected base, patch, generation fence
+ * @returns {Promise<{ok:boolean, reason?:string, current:object}>}
+ */
+export const commitLocalDb = async ({ expectedLocalDb = null, patch = {}, fence = () => true }) => {
+  for (const key of Object.keys(patch)) {
+    if (!LOCAL_DB_PATCH_KEYS.includes(key)) throw new Error(`Not a local database patch field: ${key}`);
+  }
+  if (Object.hasOwn(patch, 'lookupBackend') && !LOOKUP_BACKENDS.includes(patch.lookupBackend)) {
+    throw new Error('Unknown lookup backend');
+  }
+  await ready();
+  return withLock(async () => {
+    const all = await storage().get(['lookupBackend', 'localDb', 'localDbPendingDeletes']);
+    const fresh = {
+      lookupBackend: LOOKUP_BACKENDS.includes(all.lookupBackend) ? all.lookupBackend : DEFAULT_LOOKUP_BACKEND,
+      localDb: all.localDb ?? null,
+      localDbPendingDeletes: Array.isArray(all.localDbPendingDeletes) ? all.localDbPendingDeletes : []
+    };
+    if (stableStringify(fresh.localDb) !== stableStringify(expectedLocalDb ?? null)) {
+      return { ok: false, reason: 'changed', current: fresh };
+    }
+    const writes = {};
+    if (Object.hasOwn(patch, 'localDb')) writes.localDb = patch.localDb;
+    if (Object.hasOwn(patch, 'lookupBackend')) writes.lookupBackend = patch.lookupBackend;
+    if (patch.pendingDeletesAdd || patch.pendingDeletesRemove) {
+      // The add/remove lists apply to the FRESH list read in step 2.
+      const pending = new Set(fresh.localDbPendingDeletes);
+      for (const name of patch.pendingDeletesAdd || []) pending.add(name);
+      for (const name of patch.pendingDeletesRemove || []) pending.delete(name);
+      writes.localDbPendingDeletes = [...pending];
+    }
+    const next = { ...fresh, ...writes };
+    if (Object.keys(writes).length === 0) return { ok: true, current: next };
+    if (!fence()) return { ok: false, reason: 'stale-generation', current: fresh };
+    try {
+      await storage().set(writes);
+    } catch (err) {
+      return { ok: false, reason: 'write-failed', current: fresh };
+    }
+    return { ok: true, current: next };
+  });
+};
+
+/**
+ * Locked write of the lookup backend (the Settings radio buttons).
+ * @param {'loc-api'|'local-db'} id - Backend id
+ * @returns {Promise<void>}
+ */
+export const setLookupBackend = async (id) => {
+  if (!LOOKUP_BACKENDS.includes(id)) throw new Error('Unknown lookup backend');
+  await ready();
+  return withLock(async () => {
+    await storage().set({ lookupBackend: id });
+  });
+};
+
+/**
+ * The PAGE-owned update check (§4.6), outside the installed record and outside
+ * the bridge.
+ * @param {{lastCheckedAt:number, latestSeen:string|null}|null} [value] - New value, or omitted to read
+ * @returns {Promise<{lastCheckedAt:number, latestSeen:string|null}|null>}
+ */
+export const localDbUpdateCheck = async (value) => {
+  await ready();
+  return withLock(async () => {
+    if (value === undefined) return (await storage().get(['localDbUpdateCheck'])).localDbUpdateCheck ?? null;
+    await storage().set({ localDbUpdateCheck: value });
+    return value;
+  });
 };
 
 /**

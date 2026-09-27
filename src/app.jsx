@@ -17,6 +17,9 @@ import {
 import SettingsIcon from '@mui/icons-material/Settings';
 import SettingsPage from './components/SettingsPage';
 import { AppProvider } from './context/AppContext';
+import { createLocalDbClient } from './services/localdb/client';
+import { createUpdateChecker } from './services/localdb/pointer';
+import { localDbUpdateCheck, getSettings } from './services/settings';
 import BibliographicInfoForm from './components/BibliographicInfoForm';
 import SystemPromptEditor from './components/SystemPromptEditor';
 import InitialSuggestions from './components/InitialSuggestions';
@@ -50,6 +53,27 @@ const steps = [
 ];
 
 const SETTINGS_HASH = '#settings';
+
+// SPEC-P5 §3.1: ONE local-database client per app document, created at module
+// level ABOVE the hash-route components, so the workflow and #settings share
+// it and hash navigation never terminates it. The popup never creates one.
+const localDbClient = createLocalDbClient({
+  createWorker: () => new Worker(new URL('./services/localdb/worker.js', import.meta.url), { type: 'module' })
+});
+// The owner Web Lock is requested before the worker exists; a tab that does
+// not get it simply uses the Library of Congress online.
+localDbClient.start().catch(() => {});
+
+// §4.6: the throttled update check belongs to the DOCUMENT, not to the
+// Settings panel — it runs once when the owner page opens, and the validated
+// pointer stays available however often Settings is mounted.
+const localDbUpdates = createUpdateChecker({
+  readCheck: () => localDbUpdateCheck(),
+  writeCheck: (value) => localDbUpdateCheck(value)
+});
+getSettings()
+  .then((settings) => localDbUpdates.checkOnOpen(settings.localDb))
+  .catch(() => {});
 
 // Track the location hash, so #settings opens the Settings screen
 const useHashRoute = () => {
@@ -152,7 +176,7 @@ const App = () => {
 const AppWithProvider = () => (
     <ThemeProvider theme={theme}>
         <CssBaseline />
-        <AppProvider>
+        <AppProvider localDbClient={localDbClient} localDbUpdates={localDbUpdates}>
             <App />
         </AppProvider>
     </ThemeProvider>

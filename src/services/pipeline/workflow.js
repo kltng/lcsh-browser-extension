@@ -12,16 +12,19 @@
 import { ProviderError } from '../providers/errors';
 import { LookupError } from '../lookup/scheduler';
 import { getLookupBackend } from '../lookup/index';
+import { createLocRequester } from '../lookup/locApi';
 import { runSuggest } from './suggest';
 import { runLookupStep, LOOKUP_BUDGET_MS } from './lookupStep';
 import { runAiSelect, presentCandidates } from './select';
 import { candidateLimit } from './budget';
 import { imageMetadata } from './images';
 import { logWorkflowError } from './logging';
+import { resolveNameKeys, nameKeyTargets } from './nameKeys';
 import {
   initialRunState, beginSuggest, setSuggestSnapshot, commitSuggest, failSuggest, invalidateSuggest,
   beginLookup, commitLookup, invalidateLookups, beginSelect, setSelectSnapshot, commitSelect, failSelect,
-  invalidateSelect, continueWithoutAi, setManualChoice, buildRun
+  invalidateSelect, continueWithoutAi, setManualChoice, buildRun,
+  beginNameKeys, commitNameKeys, invalidateNameKeys
 } from './run';
 
 const provenanceOf = (cfg) => (cfg ? { providerId: cfg.providerId, model: cfg.model } : null);
@@ -56,15 +59,17 @@ export const createWorkflow = ({
   loadConfig,
   generateImpl,
   scheduler,
-  createBackend = (settings) => getLookupBackend(settings, scheduler ? { scheduler } : {}),
+  localClient = null,
+  createBackend = (settings) => getLookupBackend(settings, { ...(scheduler ? { scheduler } : {}), client: localClient }),
   uuid = () => crypto.randomUUID(),
-  lookupBudgetMs = LOOKUP_BUDGET_MS
+  lookupBudgetMs = LOOKUP_BUDGET_MS,
+  resolveNameKeysImpl = resolveNameKeys
 }) => {
   let state = initialRunState();
   // The lookup backend (and its per-run cache) belongs to one run.
   let runBackend = { runId: null, backend: null, cfg: null };
   const listeners = new Set();
-  const controllers = { suggest: null, lookup: new Set(), select: null };
+  const controllers = { suggest: null, lookup: new Set(), select: null, nameKeys: null };
 
   const set = (next) => {
     if (next === state) return;
@@ -76,12 +81,55 @@ export const createWorkflow = ({
   const abortSuggest = () => controllers.suggest?.abort();
   const abortLookups = () => controllers.lookup.forEach((c) => c.abort());
   const abortSelect = () => controllers.select?.abort();
+  const abortNameKeys = () => controllers.nameKeys?.abort();
+
+  /**
+   * The name-key operation of ONE recommendations build (SPEC-P5 §7). Its
+   * identity (revision, dependencies, effective choices) and its
+   * AbortController are reserved before the first await; the result is
+   * committed only if all of them are still current.
+   */
+  const resolveNames = async ({ retry = false } = {}) => {
+    if (state.recommendations === null) return;
+    abortNameKeys();
+    const begun = beginNameKeys(state, { retry });
+    set(begun.state);
+    if (begun.targets.length === 0) return;
+    const controller = new AbortController();
+    controllers.nameKeys = controller;
+    try {
+      // The run's validated-response cache, so a key already fetched in this
+      // run is not fetched again (§7).
+      const requester = createLocRequester({
+        ...(scheduler ? { scheduler } : {}),
+        ...(runBackend.backend?.cache ? { cache: runBackend.backend.cache } : {})
+      });
+      const resolved = await resolveNameKeysImpl({
+        targets: begun.targets, requester, signal: controller.signal, bypassCids: begun.bypassCids
+      });
+      update((s) => commitNameKeys(s, begun.token, resolved));
+    } catch (err) {
+      logWorkflowError('Error resolving name MARC keys:', err);
+      update(invalidateNameKeys);
+    } finally {
+      if (controllers.nameKeys === controller) controllers.nameKeys = null;
+    }
+  };
+
+  // A newly chosen name with no key and no recorded reason starts an operation.
+  const maybeResolveNames = () => {
+    if (state.recommendations === null) return;
+    const open = nameKeyTargets(state.recommendations)
+      .filter((t) => !Object.hasOwn(state.nameKeys.reasons, t.cid) && !Object.hasOwn(state.nameKeys.keys, t.cid));
+    if (open.length > 0) resolveNames();
+  };
 
   /** Step 1: a NEW run. Its identity and input copy are taken before any await. */
   const suggest = async ({ bibliographicInfo, rules }) => {
     abortSuggest();
     abortLookups();
     abortSelect();
+    abortNameKeys();
     const begun = beginSuggest(state, { runId: uuid(), snapshot: null, input: inputSnapshot(bibliographicInfo) });
     set(begun.state);
     const controller = new AbortController();
@@ -104,6 +152,7 @@ export const createWorkflow = ({
   };
 
   const lookup = async (ids, { bypassCache }) => {
+    abortNameKeys();
     const suggestions = (state.suggest?.suggestions || []).filter((s) => ids.includes(s.id));
     const { backend, cfg } = runBackend.runId === state.run.runId ? runBackend : {};
     if (!backend || suggestions.length === 0) return;
@@ -154,6 +203,7 @@ export const createWorkflow = ({
       const result = await runAiSelect({ cfg, bibliographicInfo: input, suggestions, results, signal: controller.signal, generateImpl });
       if (!owns()) return;
       update((s) => commitSelect(s, begun.token, result));
+      maybeResolveNames();
     } catch (err) {
       logWorkflowError('Error choosing headings:', err);
       if (owns()) update((s) => failSelect(s, begun.token, isCancel(err) ? null : toError(err)));
@@ -177,7 +227,8 @@ export const createWorkflow = ({
     }
     if (step === 'select') {
       abortSelect();
-      update(invalidateSelect);
+      abortNameKeys();
+      update((s) => invalidateNameKeys(invalidateSelect(s)));
     }
   };
 
@@ -191,16 +242,29 @@ export const createWorkflow = ({
     lookupAll,
     retryLookup,
     select,
-    continueWithoutAi: () => update(continueWithoutAi),
-    choose: (suggestionId, cid) => update((s) => setManualChoice(s, suggestionId, cid)),
-    build: () => update(buildRun),
+    continueWithoutAi: () => {
+      update(continueWithoutAi);
+      maybeResolveNames();
+    },
+    choose: (suggestionId, cid) => {
+      abortNameKeys();
+      update((s) => setManualChoice(s, suggestionId, cid));
+      maybeResolveNames();
+    },
+    build: () => {
+      update(buildRun);
+      maybeResolveNames();
+    },
+    /** "Retry name MARC keys": fresh requests for the UNRESOLVED selected cids only. */
+    retryNameKeys: () => resolveNames({ retry: true }),
     leave,
     /** Unmount: abort and invalidate every step. */
     dispose: () => {
       abortSuggest();
       abortLookups();
       abortSelect();
-      update((s) => invalidateSelect(invalidateLookups(invalidateSuggest(s))));
+      abortNameKeys();
+      update((s) => invalidateNameKeys(invalidateSelect(invalidateLookups(invalidateSuggest(s)))));
     },
     /** Load a state (tests). */
     replaceState: (next) => set(next)

@@ -9,12 +9,17 @@
  */
 /**
  * @typedef {{cid:string, authority:'lcsh'|'lcnaf'|'lcgft', localId:string, uri:string, label:string,
- *   marcKey:string|null, rdfTypes:string[], matchClass:string, source:'loc-api'}} Candidate
- * Only from a lookup backend.
+ *   marcKey:string|null, rdfTypes:string[], matchClass:string, source:'loc-api'|'local-db',
+ *   via?:'label'|'variant'|'replacement', replacementFrom?:Array<{authority:string, localId:string, label:string}>,
+ *   marcKeySource?:'loc-api'}} Candidate
+ * Only from a lookup backend. `via` and `replacementFrom` are display only (SPEC-P5 §5).
  */
 /**
  * @typedef {{suggestionId:string, outcome:'found'|'no-results'|'failed'|'partial',
- *   candidates:Candidate[], errorKind:string|null, searchedAt:string}} LookupResult
+ *   candidates:Candidate[], errorKind:string|null, searchedAt:string,
+ *   provenance:{backend:string, profile:string|null, release:string|null, releaseCommit:string|null, file:string|null},
+ *   replacementNotes:object[]}} LookupResult
+ * SPEC-P5 §6.4 adds `provenance` and `replacementNotes`.
  */
 /**
  * @typedef {{suggestionId:string, cid:string|null, method:'ai'|'exact'|'manual'|'none',
@@ -35,10 +40,30 @@ export const METHODS = ['ai', 'exact', 'manual', 'none'];
 export const MATCH_CLASSES = ['exact-full', 'exact-main', 'prefix-full', 'prefix-main', 'keyword'];
 /** §2 lists five reasons; §5.4/§5.5 add 'manual-none' for "Use none". */
 export const NONE_REASONS = ['lookup-failed', 'no-results', 'ai-chose-none', 'ai-unavailable', 'not-chosen', 'manual-none'];
-export const LOOKUP_ERROR_KINDS = ['network', 'timeout', 'rate_limit', 'server', 'invalid_output', 'cancelled'];
+/** `local_db` is the P5 kind of a failed local part (SPEC-P5 §6.4). */
+export const LOOKUP_ERROR_KINDS = ['network', 'timeout', 'rate_limit', 'server', 'invalid_output', 'cancelled', 'local_db'];
+export const SOURCES = ['loc-api', 'local-db'];
+export const VIAS = ['label', 'variant', 'replacement'];
+/** Backends a lookup result can name (SPEC-P5 §6.4). */
+export const BACKENDS = ['loc-api', 'local-db', 'mixed'];
+/** A result with no local installation behind it (pre-P5 entries default to this, §9). */
+export const ONLINE_PROVENANCE = { backend: 'loc-api', profile: null, release: null, releaseCommit: null, file: null };
+
+/** MARC reasons added by SPEC-P5 §7, next to the P4 reasons built in marc.js. */
+export const NAME_KEY_REASONS = {
+  offline: 'MARC not available offline',
+  failed: 'Name MARC-key lookup failed',
+  'no-match': 'No matching name returned by this search'
+};
 
 /** The authority badges shown in the UI. */
 export const AUTHORITY_LABELS = { lcsh: 'LCSH', lcnaf: 'LC Names', lcgft: 'LCGFT' };
+
+/** Why a replacement could not be shown as a candidate (SPEC-P5 §5). */
+export const REPLACEMENT_NOTE_WORDS = {
+  'not-in-database': 'replacement not in this database',
+  'deprecated-target': 'the replacement is itself an old heading'
+};
 
 /** noneReason in words (§7). */
 export const NONE_REASON_WORDS = {
@@ -73,19 +98,43 @@ export const makeSuggestion = ({ id, heading, kind = 'unknown', reason = '' }) =
 export const isCandidate = (c) => Boolean(c)
   && isStr(c.cid) && AUTHORITIES.includes(c.authority) && isStr(c.localId) && c.cid === `${c.authority}:${c.localId}`
   && isStr(c.uri) && isStr(c.label) && (c.marcKey === null || isStr(c.marcKey))
-  && Array.isArray(c.rdfTypes) && MATCH_CLASSES.includes(c.matchClass) && c.source === 'loc-api';
+  && Array.isArray(c.rdfTypes) && MATCH_CLASSES.includes(c.matchClass) && SOURCES.includes(c.source)
+  && (c.via === undefined || VIAS.includes(c.via));
 
 /**
- * Build a LookupResult.
- * @param {{suggestionId:string, outcome:string, candidates?:Candidate[], errorKind?:string|null, searchedAt?:string}} parts - Fields
+ * The §6.4 provenance of a lookup, with the online default for anything missing.
+ * @param {object|undefined} p - Raw provenance
+ * @returns {{backend:string, profile:string|null, release:string|null, releaseCommit:string|null, file:string|null}}
+ */
+export const makeProvenance = (p) => {
+  const strOrNull = (v) => (isStr(v) ? v : null);
+  if (!p || typeof p !== 'object') return { ...ONLINE_PROVENANCE };
+  return {
+    backend: BACKENDS.includes(p.backend) ? p.backend : 'loc-api',
+    profile: strOrNull(p.profile),
+    release: strOrNull(p.release),
+    releaseCommit: strOrNull(p.releaseCommit),
+    file: strOrNull(p.file)
+  };
+};
+
+/**
+ * Build a LookupResult. SPEC-P5 §6.4: the factory no longer drops the two
+ * additive fields; a result without them describes an online lookup.
+ * @param {{suggestionId:string, outcome:string, candidates?:Candidate[], errorKind?:string|null,
+ *   searchedAt?:string, provenance?:object, replacementNotes?:object[]}} parts - Fields
  * @returns {LookupResult}
  */
-export const makeLookupResult = ({ suggestionId, outcome, candidates = [], errorKind = null, searchedAt }) => ({
+export const makeLookupResult = ({
+  suggestionId, outcome, candidates = [], errorKind = null, searchedAt, provenance, replacementNotes
+}) => ({
   suggestionId,
   outcome: OUTCOMES.includes(outcome) ? outcome : 'failed',
   candidates,
   errorKind: errorKind ?? null,
-  searchedAt: searchedAt || new Date().toISOString()
+  searchedAt: searchedAt || new Date().toISOString(),
+  provenance: makeProvenance(provenance),
+  replacementNotes: Array.isArray(replacementNotes) ? replacementNotes : []
 });
 
 /**

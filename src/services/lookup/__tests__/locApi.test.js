@@ -1,13 +1,42 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { createLocApiBackend, rankCandidates, matchClassOf, outcomeOf, ROUTING, buildSearchUrl } from '../locApi';
 import { getLookupBackend } from '../index';
 import { createScheduler, createRunCache } from '../scheduler';
 import { toSearch } from '../searchText';
 import { response } from '../../../../test/setup';
 import { hit, EVIDENCE, mockLoc, fastSchedulerOptions } from '../../../../test/locFixtures';
+import * as coordinator from '../coordinator';
 
+// Every assertion below runs against the PRODUCTION implementation: since P5
+// there is exactly ONE staged search, and `createLocApiBackend()` is the
+// online-only way into it (review finding 11).
 const backendOf = () => createLocApiBackend({ scheduler: createScheduler(fastSchedulerOptions), cache: createRunCache() });
 const cids = (raw) => raw.candidates.map((c) => `${c.cid} ${c.matchClass}`);
+
+describe('[P5 fix11] the `loc-api` entry point IS the one coordinator', () => {
+  it('createLocApiBackend delegates to createCoordinator with no local installation', () => {
+    const spy = vi.spyOn(coordinator, 'createCoordinator');
+    try {
+      const scheduler = createScheduler(fastSchedulerOptions);
+      const cache = createRunCache();
+      const backend = createLocApiBackend({ scheduler, cache });
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(spy.mock.calls[0][0]).toMatchObject({ scheduler, cache, local: null });
+      expect(backend.id).toBe('loc-api');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('the settings factory and the legacy entry point build the same thing', () => {
+    mockLoc({});
+    const scheduler = createScheduler(fastSchedulerOptions);
+    const fromSettings = getLookupBackend({ lookupBackend: 'loc-api' }, { scheduler, cache: createRunCache() });
+    const fromEntry = createLocApiBackend({ scheduler, cache: createRunCache() });
+    expect(fromSettings.id).toBe(fromEntry.id);
+    expect(Object.keys(fromSettings).sort()).toEqual(Object.keys(fromEntry).sort());
+  });
+});
 
 describe('[P4 row5] locApi stages: exact request lists', () => {
   it('a simple topical: S1 on LCSH, exact-full, early stop', async () => {
@@ -138,7 +167,11 @@ describe('[P4 row5] locApi stages: exact request lists', () => {
     expect(buildSearchUrl('lcgft', 'a b', 'keyword')).toBe('https://id.loc.gov/authorities/genreForms/suggest2?q=a+b&count=10&searchtype=keyword');
     expect(getLookupBackend({ lookupBackend: 'loc-api' }).id).toBe('loc-api');
     expect(getLookupBackend({}).id).toBe('loc-api');
-    expect(() => getLookupBackend({ lookupBackend: 'local-db' })).toThrow();
+    // P5 §2: `local-db` is a known backend now; with nothing installed it
+    // falls back to `loc-api` (with a notice, see index.test.js). Only an
+    // unknown id still throws.
+    expect(getLookupBackend({ lookupBackend: 'local-db' }).id).toBe('loc-api');
+    expect(() => getLookupBackend({ lookupBackend: 'nope' })).toThrow();
   });
 });
 

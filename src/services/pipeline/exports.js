@@ -6,7 +6,8 @@ import { buildCsv } from '../../utils/csv';
 import { subdivisionNote } from './select';
 
 export const COPY_ALL_HEADER = 'Headings from id.loc.gov; MARC fields generated from LC authority keys';
-export const CSV_COLUMNS = ['label', 'lc_id', 'uri', 'authority', 'marc_field', 'marc_status', 'methods', 'confidence', 'subdivision_note', 'source'];
+/** SPEC-P5 §9 adds `marc_reason` (empty when MARC is available). */
+export const CSV_COLUMNS = ['label', 'lc_id', 'uri', 'authority', 'marc_field', 'marc_status', 'marc_reason', 'methods', 'confidence', 'subdivision_note', 'source'];
 
 /**
  * The MARC column text of a recommendation.
@@ -48,6 +49,7 @@ export const csvRows = (recommendations, selections) => [
     rec.authority,
     rec.marc.status === 'from-authority' ? rec.marc.text : '',
     rec.marc.status,
+    rec.marc.status === 'from-authority' ? '' : (rec.marc.reason || ''),
     JSON.stringify(rec.selections.map((s) => s.method)),
     JSON.stringify(rec.selections.map((s) => s.confidence ?? null)),
     subdivisionNote(rec, selections) || '',

@@ -52,7 +52,12 @@ export const loadActiveConfig = async () => {
   return { cfg, settings };
 };
 
-export const AppProvider = ({ children }) => {
+/**
+ * `localDbClient` is the ONE owner client of this document (SPEC-P5 §3.1),
+ * created in app.jsx above the hash routes. The popup passes nothing, so it
+ * never takes ownership.
+ */
+export const AppProvider = ({ children, localDbClient = null, localDbUpdates = null }) => {
   const [bibliographicInfo, setBibliographicInfo] = useState(EMPTY_BIBLIOGRAPHIC_INFO);
 
   // State for system prompt: the editor text, the stored value it was loaded from, and a stale flag
@@ -68,7 +73,7 @@ export const AppProvider = ({ children }) => {
 
   // The pipeline run (run.js state behind the workflow controller)
   const workflowRef = useRef(null);
-  if (!workflowRef.current) workflowRef.current = createWorkflow({ loadConfig: loadActiveConfig });
+  if (!workflowRef.current) workflowRef.current = createWorkflow({ loadConfig: loadActiveConfig, localClient: localDbClient });
   const workflow = workflowRef.current;
   const run = useSyncExternalStore(workflow.subscribe, workflow.getState);
 
@@ -162,6 +167,8 @@ export const AppProvider = ({ children }) => {
     settingsStatus,
     settingsError,
     workflow,
+    localDbClient,
+    localDbUpdates,
     run,
     activeStep,
     setActiveStep,

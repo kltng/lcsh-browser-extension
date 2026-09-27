@@ -12,6 +12,7 @@ import {
 } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import { getSettings, onSettingsChanged } from '../services/settings';
+import LocalDbPanel from './LocalDbSettings';
 import { PROVIDERS } from '../services/providers/registry';
 import ProviderSettings from './ProviderSettings';
 import NanoStatus from './NanoStatus';
@@ -93,6 +94,7 @@ const SettingsPage = ({ onClose }) => {
           )}
         </Box>
       </Box>
+      <LocalDbPanel />
     </Box>
   );
 };

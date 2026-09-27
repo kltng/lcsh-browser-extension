@@ -5,6 +5,7 @@
  */
 import { selectionsOf } from './pipeline/run';
 import { imageMetadata } from './pipeline/images';
+import { makeProvenance, VIAS } from './pipeline/types';
 
 export const HISTORY_KEY = 'conversationHistory';
 export const HISTORY_LOCK = 'lcsh-history';
@@ -49,12 +50,42 @@ const pick = (v, allowed, fallback) => (allowed.includes(v) ? v : fallback);
 
 const provenance = (p) => (p && typeof p === 'object' ? { providerId: str(p.providerId), model: str(p.model) } : null);
 
-const candidateOf = (c, backend) => ({
-  cid: str(c.cid), authority: str(c.authority), localId: str(c.localId), uri: str(c.uri), label: str(c.label),
-  marcKey: strOrNull(c.marcKey), matchClass: str(c.matchClass),
-  rdfTypes: arr(c.rdfTypes).filter((t) => typeof t === 'string'),
-  source: typeof c.source === 'string' ? c.source : backend
+const replacementFromOf = (list) => arr(list).map((f) => obj(f))
+  .map((f) => ({ authority: str(f.authority), localId: str(f.localId), label: str(f.label) }));
+
+const candidateOf = (c, backend) => {
+  const out = {
+    cid: str(c.cid), authority: str(c.authority), localId: str(c.localId), uri: str(c.uri), label: str(c.label),
+    marcKey: strOrNull(c.marcKey), matchClass: str(c.matchClass),
+    rdfTypes: arr(c.rdfTypes).filter((t) => typeof t === 'string'),
+    // An entry saved before P5 has no per-candidate source; the entry backend fills it.
+    source: typeof c.source === 'string' ? c.source : backend
+  };
+  if (VIAS.includes(c.via)) out.via = c.via;
+  if (Array.isArray(c.replacementFrom)) out.replacementFrom = replacementFromOf(c.replacementFrom);
+  if (typeof c.marcKeySource === 'string') out.marcKeySource = c.marcKeySource;
+  return out;
+};
+
+const replacementNoteOf = (n) => ({
+  fromAuthority: str(n.fromAuthority), fromLocalId: str(n.fromLocalId), fromLabel: str(n.fromLabel),
+  targetAuthority: str(n.targetAuthority), targetLocalId: str(n.targetLocalId),
+  reason: pick(n.reason, ['not-in-database', 'deprecated-target'], 'not-in-database')
 });
+
+/**
+ * The entry-level backend, DERIVED from the saved results' provenance (§9):
+ * one backend if they all agree, else `'mixed'`. History never reads the
+ * current installation.
+ * @param {object[]} results - The saved lookup results
+ * @returns {'loc-api'|'local-db'|'mixed'}
+ */
+export const derivedBackend = (results) => {
+  const backends = new Set(arr(results).map((r) => makeProvenance(obj(r).provenance).backend));
+  if (backends.size === 0) return 'loc-api';
+  if (backends.size === 1) return [...backends][0];
+  return 'mixed';
+};
 
 const selectionOf = (s) => ({
   suggestionId: str(s.suggestionId), cid: strOrNull(s.cid), method: pick(s.method, ['ai', 'exact', 'manual', 'none'], 'none'),
@@ -79,7 +110,18 @@ export const rebuildV2 = (raw) => {
   const r = obj(raw);
   const bib = obj(r.bibliographicInfo);
   const lookup = obj(r.lookup);
-  const backend = str(lookup.backend) || 'loc-api';
+  const results = arr(lookup.results).map((x) => {
+    const one = obj(x);
+    return {
+      suggestionId: str(one.suggestionId), outcome: pick(one.outcome, ['found', 'no-results', 'failed', 'partial'], 'failed'),
+      errorKind: strOrNull(one.errorKind), searchedAt: str(one.searchedAt),
+      // Pre-P5 entries have no provenance and no notes: online, nothing replaced.
+      provenance: makeProvenance(one.provenance),
+      replacementNotes: arr(one.replacementNotes).map((n) => replacementNoteOf(obj(n))),
+      candidates: arr(one.candidates)
+    };
+  });
+  const backend = derivedBackend(results);
   const prov = obj(r.provenance);
   return {
     v: 2,
@@ -97,10 +139,9 @@ export const rebuildV2 = (raw) => {
     })),
     lookup: {
       backend,
-      results: arr(lookup.results).map((x) => ({
-        suggestionId: str(x?.suggestionId), outcome: pick(x?.outcome, ['found', 'no-results', 'failed', 'partial'], 'failed'),
-        errorKind: strOrNull(x?.errorKind), searchedAt: str(x?.searchedAt),
-        candidates: arr(x?.candidates).map((c) => candidateOf(obj(c), backend))
+      results: results.map((x) => ({
+        ...x,
+        candidates: x.candidates.map((c) => candidateOf(obj(c), x.provenance.backend === 'mixed' ? 'loc-api' : x.provenance.backend))
       }))
     },
     selectMode: pick(r.selectMode, ['ai', 'exact-fallback'], 'ai'),
@@ -110,6 +151,7 @@ export const rebuildV2 = (raw) => {
       return {
         cid: str(rec.cid), label: str(rec.label), authority: str(rec.authority), localId: str(rec.localId), uri: str(rec.uri),
         source: str(rec.source) || backend,
+        ...(typeof rec.marcKeySource === 'string' ? { marcKeySource: rec.marcKeySource } : {}),
         selections: arr(rec.selections).map((s) => {
           const o = obj(s);
           return {
@@ -137,10 +179,8 @@ export const buildHistoryEntry = ({ run, id = crypto.randomUUID(), timestamp = n
   return rebuildV2({
     id, timestamp, bibliographicInfo: run.input || {},
     subjectAnalysis: run.suggest?.subjectAnalysis, suggestMode: run.suggest?.suggestMode, suggestions,
-    lookup: {
-      backend: 'loc-api',
-      results: suggestions.map((s) => run.lookup.results[s.id]).filter(Boolean)
-    },
+    // The entry-level backend is DERIVED in rebuildV2 from the saved results.
+    lookup: { results: suggestions.map((s) => run.lookup.results[s.id]).filter(Boolean) },
     selectMode: run.select.mode === 'exact-fallback' ? 'exact-fallback' : 'ai',
     selections: selectionsOf(run),
     recommendations: run.recommendations || [],

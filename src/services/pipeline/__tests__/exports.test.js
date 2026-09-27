@@ -7,14 +7,15 @@ describe('[P4 row14] csv: the recommendation export', () => {
   it('columns, methods/confidence as JSON arrays aligned with selections, the subdivision note, the source', () => {
     const run = builtRun();
     const rows = csvRows(run.recommendations, selectionsOf(run));
-    expect(rows[0]).toEqual(['label', 'lc_id', 'uri', 'authority', 'marc_field', 'marc_status', 'methods', 'confidence', 'subdivision_note', 'source']);
+    // P5 §9 adds `marc_reason` after `marc_status`.
+    expect(rows[0]).toEqual(['label', 'lc_id', 'uri', 'authority', 'marc_field', 'marc_status', 'marc_reason', 'methods', 'confidence', 'subdivision_note', 'source']);
     expect(CSV_COLUMNS).toEqual(rows[0]);
     expect(rows[1]).toEqual([
       C.mpjh.label, 'sh2008108026', C.mpjh.uri, 'lcsh', '650 _0 $a Motion pictures $z Japan $x History', 'from-authority',
-      '["ai"]', '[85]', '', 'loc-api'
+      '', '["ai"]', '[85]', '', 'loc-api'
     ]);
-    expect(rows[2].slice(6, 8)).toEqual(['["manual"]', '[null]']);
-    expect(rows[3].slice(6, 8)).toEqual(['["ai"]', '[45]']);
+    expect(rows[2].slice(7, 9)).toEqual(['["manual"]', '[null]']);
+    expect(rows[3].slice(7, 9)).toEqual(['["ai"]', '[45]']);
     expect(rows).toHaveLength(4);
     const csv = recommendationsCsv(run.recommendations, selectionsOf(run));
     expect(csv).toContain('"[""ai""]","[85]"');
@@ -33,9 +34,10 @@ describe('[P4 row14] csv: the recommendation export', () => {
     const [, row] = csvRows([rec], selections);
     expect(row[4]).toBe('');
     expect(row[5]).toBe('unavailable');
-    expect(row[6]).toBe('["ai","manual"]');
-    expect(row[7]).toBe('[85,null]');
-    expect(row[8]).toBe('The selected heading does not include these suggested subdivisions: Japan, History, Biography');
+    expect(row[6]).toBe('no key');
+    expect(row[7]).toBe('["ai","manual"]');
+    expect(row[8]).toBe('[85,null]');
+    expect(row[9]).toBe('The selected heading does not include these suggested subdivisions: Japan, History, Biography');
     const text = copyAllText([rec], selections);
     expect(text.split('\n')).toEqual([
       COPY_ALL_HEADER,

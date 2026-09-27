@@ -9,7 +9,17 @@ import { selectionsOf } from '../services/pipeline/run';
 import { subdivisionNote } from '../services/pipeline/select';
 import { copyAllText, recommendationsCsv } from '../services/pipeline/exports';
 import { NONE_REASON_WORDS } from '../services/pipeline/types';
-import { methodText, authorityLabel, lcLink } from './pipelineText';
+import { needsNameKey } from '../services/pipeline/nameKeys';
+import { methodText, authorityLabel, lcLink, viaNote } from './pipelineText';
+
+/**
+ * Whether any recommendation is a local name whose MARC key is still missing
+ * (SPEC-P5 §7: the Recommendations step then offers "Retry name MARC keys").
+ * @param {object[]} recommendations - Recommendations
+ * @returns {boolean}
+ */
+export const hasUnresolvedNameKeys = (recommendations = []) =>
+  recommendations.some((rec) => needsNameKey(rec) && rec.marc?.status !== 'from-authority');
 
 /**
  * Step 4 content: one card per Recommendation, then the suggestions without
@@ -40,6 +50,9 @@ export const RecommendationsPanel = ({ recommendations, selections, suggestions,
               <Typography variant="body2" sx={{ mt: 0.5 }}>
                 {rec.selections.map((s) => methodText(s)).join(' · ')}
               </Typography>
+              {viaNote(rec) && (
+                <Typography variant="caption" color="text.secondary">{viaNote(rec)}</Typography>
+              )}
               {rec.marc.status === 'from-authority' ? (
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1 }}>
                   <Typography variant="caption" color="text.secondary">MARC field (text form):</Typography>
@@ -80,7 +93,7 @@ export const RecommendationsPanel = ({ recommendations, selections, suggestions,
 };
 
 const FinalRecommendations = () => {
-  const { run, setActiveStep, saveRunToHistory } = useAppContext();
+  const { run, workflow, setActiveStep, saveRunToHistory } = useAppContext();
   const [snackbar, setSnackbar] = useState('');
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
@@ -137,6 +150,19 @@ const FinalRecommendations = () => {
     <Box>
       <Typography variant="h6" gutterBottom>Recommendations</Typography>
       {saveError && <Alert severity="error" sx={{ mb: 2 }}>{saveError}</Alert>}
+      {hasUnresolvedNameKeys(recommendations) && (
+        <Alert
+          severity="info"
+          sx={{ mb: 2 }}
+          action={(
+            <Button size="small" disabled={run.nameKeys?.pending} onClick={() => workflow.retryNameKeys()}>
+              Retry name MARC keys
+            </Button>
+          )}
+        >
+          The MARC key of a name is looked up at the Library of Congress.
+        </Alert>
+      )}
       <RecommendationsPanel
         recommendations={recommendations}
         selections={selections}

@@ -71,6 +71,15 @@ We do not store any of your data on our servers. All processing occurs either lo
 - **Privacy Policy:** [Library of Congress Privacy Policy](https://www.loc.gov/legal/privacy-policy/)
 - **Note:** The Library of Congress website may collect standard web analytics data when the extension makes requests.
 
+### Hugging Face (local database downloads)
+- **Purpose:** Download the optional local LCSH database.
+- **Data Sent:** Database downloads do not include entered bibliographic text or
+  headings. Hugging Face and its CDN receive ordinary connection metadata. With
+  the core database, name searches use the Library of Congress online; with the
+  full database, resolving chosen names' MARC keys also uses the Library of
+  Congress online.
+- **Privacy Policy:** [Hugging Face Privacy Policy](https://huggingface.co/privacy)
+
 ## Data Sharing
 
 We do not sell, rent, or share your data with any third parties for marketing or advertising purposes. Your data is only shared with:

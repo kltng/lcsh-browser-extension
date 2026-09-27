@@ -36,8 +36,11 @@ export async function runLookupStep({
       debug.rejectedHits += raw.rejectedHits;
       debug.requests.push(...raw.requests);
       const { outcome, errorKind } = outcomeOf({ ...raw, incompleteKind: 'timeout' });
+      // SPEC-P5 §6.4: `provenance` and `replacementNotes` travel with the result.
       const result = makeLookupResult({
-        suggestionId: suggestion.id, outcome, errorKind, candidates: raw.candidates, searchedAt: new Date().toISOString()
+        suggestionId: suggestion.id, outcome, errorKind, candidates: raw.candidates,
+        searchedAt: new Date().toISOString(),
+        provenance: raw.provenance, replacementNotes: raw.replacementNotes
       });
       if (!signal?.aborted) onResult?.(result);
       return result;

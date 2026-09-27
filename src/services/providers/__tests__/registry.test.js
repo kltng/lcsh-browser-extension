@@ -64,7 +64,10 @@ describe('[row 3] registry', () => {
     }
     for (const extra of ['https://*/*', 'http://localhost/*', 'http://127.0.0.1/*']) expect(optional).toContain(extra);
     expect(manifest.host_permissions).toContain('https://id.loc.gov/*');
-    expect(manifest.permissions).toEqual(['storage']);
+    // P5 §10: `unlimitedStorage` protects the local database from eviction.
+    expect(manifest.permissions).toEqual(['storage', 'unlimitedStorage']);
+    expect(manifest.content_security_policy.extension_pages)
+      .toBe("script-src 'self' 'wasm-unsafe-eval'; object-src 'self';");
   });
 });
 

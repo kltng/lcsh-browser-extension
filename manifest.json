@@ -4,8 +4,12 @@
     "version": "1.1.0",
     "description": "Suggests Library of Congress Subject Headings with your choice of AI provider",
     "permissions": [
-        "storage"
+        "storage",
+        "unlimitedStorage"
     ],
+    "content_security_policy": {
+        "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';"
+    },
     "host_permissions": [
         "https://id.loc.gov/*",
         "https://generativelanguage.googleapis.com/*"

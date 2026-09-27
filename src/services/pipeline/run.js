@@ -5,8 +5,14 @@
  * Stages: idle → suggesting → suggested → looking-up → looked-up → selecting → selected → built.
  */
 import { mergeSelections, buildRecommendations, exactOnlyChoices } from './select';
+import { applyNameKeys, nameKeyTargets, mergeNameKeys } from './nameKeys';
 
 export const STAGES = ['idle', 'suggesting', 'suggested', 'looking-up', 'looked-up', 'selecting', 'selected', 'built'];
+
+// The name-key operation (SPEC-P5 §7) belongs to ONE recommendations build.
+// `keys` and `reasons` are kept per run by cid: a resolved key is reused, and
+// a recorded reason stops ordinary regeneration from looping on a failure.
+const emptyNameKeys = () => ({ revision: 0, pending: false, keys: {}, reasons: {}, deps: {}, choicesKey: null });
 
 // `deps`: the lookup revision of every candidate list the pending selection
 // presented; a choice from a list that was replaced since then is rejected.
@@ -25,10 +31,16 @@ export const initialRunState = () => ({
   suggestError: null,
   lookup: { results: {}, revisions: {}, pending: {} },
   select: emptySelect(),
+  nameKeys: emptyNameKeys(),
   recommendations: null
 });
 
 const withStage = (state, stage) => ({ ...state, run: { ...state.run, stage } });
+
+const nameKeyMaps = (state) => ({
+  keys: new Map(Object.entries(state.nameKeys.keys)),
+  reasons: new Map(Object.entries(state.nameKeys.reasons))
+});
 
 /**
  * The effective selections of the current state.
@@ -43,16 +55,27 @@ export const selectionsOf = (state) => mergeSelections({
   manual: state.select.manual
 });
 
+/** The recommendations of a state, with the name keys resolved so far applied. */
+const recommendationsOf = (state) => applyNameKeys(buildRecommendations({
+  selections: selectionsOf(state), additional: state.select.additional, results: state.lookup.results
+}), nameKeyMaps(state));
+
 // Any change of a choice or a candidate list regenerates built recommendations.
 const refresh = (state) => {
   if (state.recommendations === null) return state;
-  return {
-    ...state,
-    recommendations: buildRecommendations({
-      selections: selectionsOf(state), additional: state.select.additional, results: state.lookup.results
-    })
-  };
+  return { ...state, recommendations: recommendationsOf(state) };
 };
+
+/**
+ * A stable key of the EFFECTIVE choices, so a name-key result can be rejected
+ * when a choice changed while it was running (SPEC-P5 §7).
+ * @param {object} state - Run state
+ * @returns {string}
+ */
+export const effectiveChoicesKey = (state) => [
+  ...selectionsOf(state).map((s) => `${s.suggestionId}:${s.cid ?? ''}`),
+  ...state.select.additional.map((a) => `+:${a.cid}`)
+].join('|');
 
 /**
  * Start a NEW run with Suggest: clears lookup, selection and recommendations.
@@ -67,6 +90,8 @@ export const beginSuggest = (state, { runId, snapshot, input }) => {
   // Revisions keep increasing across runs, so no old token can ever match.
   next.lookup.revisions = { ...state.lookup.revisions };
   next.select.revision = state.select.revision;
+  // A new run invalidates the name-key operation and drops its per-run keys.
+  next.nameKeys = { ...emptyNameKeys(), revision: state.nameKeys.revision + 1 };
   return { state: next, token: { runId } };
 };
 
@@ -144,11 +169,12 @@ export const beginLookup = (state, suggestionIds) => {
   // from (validateSelectAnswer); a retried list drops its picks.
   const additional = state.select.additional.filter((pick) => !suggestionIds.includes(pick.suggestionId));
   const all = (state.suggest?.suggestions || []).every((s) => suggestionIds.includes(s.id));
-  let next = {
+  // A lookup retry changes an input of the name-key operation (§7, HOUSE_RULES 14).
+  let next = invalidateNameKeys({
     ...state,
     lookup: { results, revisions, pending },
     select: { ...state.select, choices, manual, additional }
-  };
+  });
   if (all) {
     next = { ...withStage(next, 'looking-up'), select: { ...emptySelect(), revision: state.select.revision + 1 }, recommendations: null };
   }
@@ -310,9 +336,77 @@ export const setManualChoice = (state, suggestionId, cid) => {
  * @param {object} state - Run state
  * @returns {object}
  */
-export const buildRun = (state) => withStage({
-  ...state,
-  recommendations: buildRecommendations({
-    selections: selectionsOf(state), additional: state.select.additional, results: state.lookup.results
-  })
-}, 'built');
+export const buildRun = (state) => withStage({ ...state, recommendations: recommendationsOf(state) }, 'built');
+
+/**
+ * Start the name-key operation of the CURRENT recommendations build (§7).
+ * @param {object} state - Run state
+ * @param {{retry?:boolean}} [opts] - Retry bypasses the run cache for unresolved cids
+ * @returns {{state:object, token:object, targets:object[], bypassCids:Set<string>}}
+ */
+export const beginNameKeys = (state, { retry = false } = {}) => {
+  const revision = state.nameKeys.revision + 1;
+  const deps = {};
+  for (const id of Object.keys(state.lookup.results)) {
+    if (!state.lookup.pending[id]) deps[id] = state.lookup.revisions[id];
+  }
+  const choicesKey = effectiveChoicesKey(state);
+  // Review finding 7: a cid whose key is already resolved in this run is never
+  // asked for again, not even by Retry — neither as a target nor in the
+  // cache-bypass set (§7: "resolved keys stay reused").
+  const unresolved = nameKeyTargets(state.recommendations || [])
+    .filter((t) => !Object.hasOwn(state.nameKeys.keys, t.cid));
+  // Ordinary regeneration never loops on a failed resolution; Retry asks again
+  // for the UNRESOLVED selected cids only.
+  const targets = retry ? unresolved : unresolved.filter((t) => !Object.hasOwn(state.nameKeys.reasons, t.cid));
+  const next = {
+    ...state,
+    nameKeys: { ...state.nameKeys, revision, pending: targets.length > 0, deps, choicesKey }
+  };
+  return {
+    state: next,
+    token: { runId: state.run.runId, revision, deps, choicesKey },
+    targets,
+    bypassCids: new Set(retry ? unresolved.map((t) => t.cid) : [])
+  };
+};
+
+const isCurrentNameKeys = (state, token) => isCurrentRun(state, token)
+  && state.nameKeys.revision === token.revision && state.nameKeys.pending
+  && effectiveChoicesKey(state) === token.choicesKey
+  && Object.entries(token.deps).every(([id, revision]) => state.lookup.revisions[id] === revision
+    && !state.lookup.pending[id]);
+
+/**
+ * Commit one name-key round: resolved keys are kept per run by cid, and the
+ * recommendations are regenerated (every key re-checked by buildMarc()).
+ * @param {object} state - Run state
+ * @param {object} token - Token of beginNameKeys
+ * @param {Map<string, object>} resolved - Result of resolveNameKeys
+ * @returns {object}
+ */
+export const commitNameKeys = (state, token, resolved) => {
+  if (!isCurrentNameKeys(state, token)) return state;
+  const merged = mergeNameKeys(nameKeyMaps(state), resolved);
+  const next = {
+    ...state,
+    nameKeys: {
+      ...state.nameKeys,
+      pending: false,
+      keys: Object.fromEntries(merged.keys),
+      reasons: Object.fromEntries(merged.reasons)
+    }
+  };
+  return refresh(next);
+};
+
+/**
+ * Invalidate a pending name-key operation (a new run, a relevant lookup retry,
+ * a changed choice or disposal).
+ * @param {object} state - Run state
+ * @returns {object}
+ */
+export const invalidateNameKeys = (state) => {
+  if (!state.nameKeys.pending) return state;
+  return { ...state, nameKeys: { ...state.nameKeys, pending: false, revision: state.nameKeys.revision + 1 } };
+};

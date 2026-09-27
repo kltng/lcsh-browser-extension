@@ -132,6 +132,8 @@ export const createFakeStorage = () => {
 
 /**
  * Fake Web Locks: exclusive, FIFO per name, shared by every fake page.
+ * `ifAvailable: true` calls the callback with `null` when the lock is held
+ * (SPEC-P5 §3.1 uses it for the one-owner rule).
  * @returns {object}
  */
 export const createFakeLocks = () => {
@@ -140,8 +142,13 @@ export const createFakeLocks = () => {
   const stats = { maxConcurrent: 0, current: 0 };
   const request = (name, optsOrCb, maybeCb) => {
     const cb = typeof optsOrCb === 'function' ? optsOrCb : maybeCb;
+    const opts = typeof optsOrCb === 'function' ? {} : (optsOrCb || {});
     if (!queues.has(name)) queues.set(name, { held: false, waiting: [] });
     const q = queues.get(name);
+    if (opts.ifAvailable && q.held) {
+      log.push(`unavailable:${name}`);
+      return Promise.resolve().then(() => cb(null));
+    }
     return new Promise((resolve, reject) => {
       const run = async () => {
         q.held = true;
