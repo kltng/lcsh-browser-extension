@@ -1,10 +1,10 @@
 # SPEC-P5 — Local LCSH database in the extension
 
-Status: v2.1, 2026-09-27 (review round 2 edits folded, §17). v1 was REJECTED (14 findings, 4 HIGH;
+Status: v2.2, 2026-09-27 (round 2 §17; round 3 §18). Dispatch-ready. v1 was REJECTED (14 findings, 4 HIGH;
 `.dispatch/spec-review-p5-1/last_message.md`; v1 archived at
 `.dispatch/SPEC-P5.v1.md`). §16 maps each finding to its fix. Builds on
 SPEC-P4 (lookup step, Candidate, honesty rule) and the builder contract
-(`lcsh-db-builder` docs/SPEC.md v3.3, docs/SCHEMA_QUERIES.md v2).
+(`lcsh-db-builder` docs/SPEC.md v3.5, docs/SCHEMA_QUERIES.md v2).
 
 ## 0. Goals, owner decisions, non-goals
 
@@ -124,19 +124,29 @@ action, expectedLocalDb, patch}` handled by the client with `settings.js`:
   localDbPendingDeletes}`.
 - `action: 'commit'`: under `'lcsh-settings'`, the client (1) checks that
   `workerGeneration` is the client's current worker generation and
-  `operationId` is the running mutation, (2) rereads settings, (3) compares
+  `operationId` is the running operation, (2) rereads settings, (3) compares
   `expectedLocalDb` STRUCTURALLY (deep equality of the record, `null`
-  included) with the fresh `localDb`, (4) applies `patch` and writes, and
-  answers after the write is confirmed: `{ok: true, current}` or `{ok: false,
+  included) with the fresh `localDb`, (4) RECHECKS `workerGeneration` and
+  `operationId` immediately before issuing the storage write, with no await
+  in between, (5) applies `patch` and writes, and answers after the write is
+  confirmed: `{ok: true, current}` or `{ok: false,
   reason: 'stale-generation' | 'changed' | 'write-failed', current}`.
 - `patch` is allowlisted: `localDb`, `lookupBackend`,
   `pendingDeletesAdd: [names]`, `pendingDeletesRemove: [names]`. The
   add/remove lists are applied to the FRESH `localDbPendingDeletes` read in
   step 2; every other setting is preserved.
-- Worker replacement: the client first increments `workerGeneration` (so
-  later bridge requests from the old worker are refused), then WAITS for
-  every bridge write it already started to settle, and only then starts the
-  new worker's §3.4 recovery.
+- Worker replacement: the client first increments `workerGeneration`, then
+  WAITS for every ADMITTED commit handler to settle (including handlers still
+  awaiting their settings read), and only then starts the new worker's §3.4
+  recovery. Already-issued writes are drained; a handler that has not yet
+  issued its write fails the step-4 fence.
+- `action: 'read'` also runs under `'lcsh-settings'`.
+- Startup recovery (§3.4) is a serialized internal operation with its own
+  `operationId`, recognized by the bridge before the client is ready; its
+  cleanup commits use the recorded active `localDb` as `expectedLocalDb`.
+- The update check (§4.6) is owned by the PAGE, which reads/writes
+  `localDbUpdateCheck` through a locked `settings.js` helper (not the
+  bridge).
 - Naming: `workerGeneration` (this section) and `installationIdentity`
   (§6.5) are different things.
 
@@ -275,13 +285,14 @@ result is shown, not required).
    (new queries wait; running ones finish). Send the bridge `commit` with
    `expectedLocalDb` = the record read at the start of the operation and
    `patch` = `{localDb: newRecord, pendingDeletesAdd: [oldFile]}` (only if
-   there is an old file). The CONFIRMED WRITE is the commit point; the answer
-   is how the worker learns it. While the answer is outstanding, BOTH files
+   there is an old file). The commit point is the SUCCESSFUL SETTINGS WRITE;
+   the bridge answer only reports its result, so a lost answer does not mean
+   that no commit happened. While the answer is outstanding, BOTH files
    are kept.
    - `{ok: false, reason: 'changed' | 'stale-generation' | 'write-failed'}`
      → the common terminal rule (§4.8); the old installation is untouched.
    - Bridge error or no answer (result uncertain) → wait for the outstanding
-     bridge operation to settle, then `read` again under the settings lock.
+     commit handler to settle, then `read` again (under the settings lock).
      If `localDb` equals the new record → continue at step 8; if it equals
      the old record → terminal rule; if the read fails or shows anything
      else → keep BOTH files, serve no local queries, state
@@ -324,7 +335,13 @@ deletion (→ `repair-needed`).
    resolved exit. The UI distinguishes "Uninstalled" from "Uninstalled;
    cleanup pending".
 
-### 4.8 Common terminal rule (every failure or cancel before the commit)
+### 4.8 Common terminal rule
+
+It applies to failures and accepted cancellations BEFORE `committing`, and to
+commit attempts DEFINITIVELY resolved as not committed (`ok: false`, or a
+reconciliation read showing the old record). It never applies while a
+commit's result is unresolved: then both files are kept and §4.5 step 7
+reconciliation runs.
 
 Stop the import or verification; finalize statements; close every staging
 handle; then delete the staging file. A failed deletion is recorded with
@@ -420,7 +437,8 @@ rejectedHits, requests, provenance, replacementNotes}`.
 - `provenance` = `{backend, profile, release, releaseCommit, file}` captured
   when the lookup starts. `backend` is the EFFECTIVE backend: `'loc-api'`,
   `'local-db'`, or `'mixed'` (core + LOC), including the fallbacks of §2 and
-  §3 (then `'loc-api'`; profile/release/file null).
+  §3 (then `'loc-api'`; `profile`, `release`, `releaseCommit` and `file`
+  null).
 - `replacementNotes` = the §5 notes.
 - `runLookupStep()` and `makeLookupResult()` carry both fields into the
   LookupResult (today the factory drops unknown fields; it is extended).
@@ -499,8 +517,9 @@ Settings → "Lookup source":
 - Install panel: "Core — subjects and genres (download X, disk Y). Names are
   looked up online." [Download]; "Advanced" disclosure: "Full — also 12
   million names (download X, disk Y)". Values from the pointer.
-- During install: progress, bytes, Cancel (disabled after the commit point:
-  "Finishing install…"), "Keep this tab open".
+- During install: progress, bytes, Cancel (disabled from the moment the
+  install enters `committing`, before the commit request: "Finishing
+  install…"), "Keep this tab open".
 - Errors from §4 in plain words, each with "Try again".
 - Update banner (§4.6).
 - Matches step: the source per candidate list ("Local database (release
@@ -510,11 +529,17 @@ Settings → "Lookup source":
 
 ## 9. History and exports
 
-- History records per lookup result the §6.5 provenance (`backend`,
-  `profile`, `release`) and per candidate `source`, `via`,
-  `replacementFrom`; per recommendation `marcKeySource`. `history.js`
-  building AND rebuilding (the allowlist) are extended; old entries still
-  read as `loc-api`. History never reads the current installation.
+- History building AND rebuilding (the allowlist) preserve each lookup
+  result's complete §6.4 `provenance: {backend, profile, release,
+  releaseCommit, file}` and `replacementNotes`; per candidate `source`,
+  `via`, `replacementFrom`; per recommendation `marcKeySource`.
+- Pre-P5 v2 entries without this metadata default to online provenance
+  (`backend: 'loc-api'`, the four installation fields null) and notes `[]`.
+  Legacy (v1.1.0/P3) unverified-history handling is unchanged.
+- The entry-level `lookup.backend` (today hard-coded `'loc-api'` in
+  `history.js`) is DERIVED from the saved results' provenance: one backend
+  if all agree, else `'mixed'`. It stays separate from the model
+  provenance. History never reads the current installation.
 - CSV gains a `marc_reason` column (empty when MARC is available). Copy all
   already prints the reason.
 
@@ -573,7 +598,9 @@ to them.
    missing active file; `cancel` racing the commit request (refused once
    `committing`); commit answer lost → reread decides; the stored-byte reader
    against a fake VFS returning a short read, an error code, and a wrong
-   `xFileSize`; batch yielding (a `status` ping answered mid-verify).
+   `xFileSize`; batch yielding (a `status` ping answered mid-verify); worker
+   replacement while a bridge commit's settings read is pending (the old
+   handler fails the final fence; recovery waits for it).
 8. SHA-256 wrapper: NIST vectors, random chunk boundaries, a stream longer
    than 2^32 bytes (generated, bounded memory) for length accounting.
 9. Ownership client: lock unavailable → fallback state; crash → reject
@@ -672,3 +699,12 @@ tiny fixtures test correctness only.
 | 7 | §7 Retry bypasses the cache for unresolved cids; reused keys re-run `buildMarc()` |
 | 8 | §5 query-contract exception; builder SPEC v3.4 §6.1 carries it |
 | 9 | §4.2 URL wording (normalizing spellings allowed); release sequence safe integer |
+
+## 18. P5 review round 3 → v2.2
+
+| # | Fix |
+|---|---|
+| 1 | §3.3 step-4 fence right before the write; replacement waits for ADMITTED handlers; §12 row 7 test |
+| 2 | §8 Cancel disabled on entering `committing`; §4.8 scope excludes unresolved commits; §4.5 step 7 commit point = successful write |
+| 3 | §3.3 recovery `operationId`, locked `read`, page-owned update check |
+| 4 | §9 full provenance + notes in history, defaults for old entries, derived entry-level backend; §6.4 null `releaseCommit` online; builder ref v3.5 |
