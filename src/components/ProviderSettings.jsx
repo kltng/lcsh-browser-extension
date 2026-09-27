@@ -23,8 +23,7 @@ import {
   regionFor, modelMetaKey, findModelMeta, resolveCapabilities
 } from '../services/providers/capabilities';
 import {
-  initialDraftState, applyStoredChange, editDraft, afterSave, patchFromDraft, beginPermissionGesture,
-  beginSave, endSave, watchSavedAccess
+  initialDraftState, applyStoredChange, editDraft, afterSave, patchFromDraft, runGestureAction, watchSavedAccess
 } from './providerDraft';
 
 const STALE_MESSAGE = 'Settings changed in another tab — reload them.';
@@ -89,33 +88,18 @@ const ProviderSettings = ({ entry, stored, modelMeta, isActive }) => {
 
   // The gesture rule: validation, origin and chrome.permissions.request happen first, synchronously.
   // A save also locks the form (fields and buttons) until it completes.
-  const runWithPermission = (value, work, { save = false } = {}) => {
-    const gesture = beginPermissionGesture(entry, value);
-    if (!gesture.ok) {
-      setMessages([{ severity: 'error', text: gesture.reason }]);
-      return;
+  // A denied request saves nothing and keeps the typed draft (runGestureAction)
+  const runWithPermission = (value, work, { save = false } = {}) => runGestureAction(entry, value, work, {
+    save,
+    setForm,
+    setBusy,
+    setMessages,
+    recheck: () => recheckRef.current(),
+    onError: (err) => {
+      recheckOnPermissionError(err);
+      setMessages([{ severity: 'error', text: messageOf(err) }]);
     }
-    setBusy(true);
-    if (save) setForm(beginSave);
-    setMessages([]);
-    gesture.granted
-      .then(async (granted) => {
-        if (!granted) {
-          setMessages([{ severity: 'error', text: `Permission needed to contact ${gesture.host}` }]);
-          recheckRef.current();
-          return;
-        }
-        await work();
-      })
-      .catch((err) => {
-        recheckOnPermissionError(err);
-        setMessages([{ severity: 'error', text: messageOf(err) }]);
-      })
-      .finally(() => {
-        if (save) setForm(endSave);
-        setBusy(false);
-      });
-  };
+  });
 
   const handleSaveResult = (result, okText) => {
     setForm((state) => afterSave(state, result));

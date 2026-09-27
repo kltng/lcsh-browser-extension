@@ -1,5 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
 import { fakes, flushEvents } from '../../../test/setup';
+import { DEFAULT_RULES } from '../pipeline/prompts';
+import { OLD_DEFAULT_RULES, OLD_DEFAULT_RULES_V1_1_0, OLD_DEFAULT_RULES_V1_0 } from '../pipeline/legacyRules';
 
 // Each call gives a separate module instance: one fake extension page.
 // All pages share the fake chrome.storage and the fake navigator.locks.
@@ -204,5 +208,75 @@ describe('[row 25] settings readiness failure (settings module)', () => {
     const page = await openPage();
     await expect(page.ready()).rejects.toThrow('storage broken');
     await expect(page.ready()).resolves.toBeUndefined();
+  });
+});
+
+describe('[P4 row3] suggest: untouched old default rules are migrated to DEFAULT_RULES (fix-1 #7)', () => {
+  const load = async () => (await openPage()).loadSystemPromptRules(DEFAULT_RULES);
+  const rulesWrites = () => fakes.storage.calls.set.filter((items) => Object.hasOwn(items, 'systemPromptRules'));
+
+  it('the frozen literals are byte-exact copies of the lead-provided historical defaults', () => {
+    const files = [
+      ['old_default_rules.txt', OLD_DEFAULT_RULES_V1_1_0, 947],
+      ['old_default_rules_v1_0.txt', OLD_DEFAULT_RULES_V1_0, 948]
+    ];
+    for (const [name, literal, bytes] of files) {
+      expect(Buffer.byteLength(literal, 'utf8')).toBe(bytes);
+      const file = path.resolve(process.cwd(), '.dispatch/p4-fix-1', name);
+      // The lead's copies live in the git-ignored .dispatch/ folder; compare when present.
+      if (fs.existsSync(file)) expect(literal).toBe(fs.readFileSync(file, 'utf8'));
+    }
+    expect(OLD_DEFAULT_RULES).toEqual([OLD_DEFAULT_RULES_V1_1_0, OLD_DEFAULT_RULES_V1_0]);
+  });
+
+  it.each([['v1.1.0', OLD_DEFAULT_RULES_V1_1_0], ['v1.0.x', OLD_DEFAULT_RULES_V1_0]])('the exact %s default → migrated (one awaited write)', async (_, old) => {
+    fakes.storage.seed({ settingsVersion: 2, activeProviderId: 'gemini', systemPromptRules: old });
+    expect(await load()).toBe(DEFAULT_RULES);
+    expect(fakes.storage.data.get('systemPromptRules')).toBe(DEFAULT_RULES);
+    expect(rulesWrites()).toEqual([{ systemPromptRules: DEFAULT_RULES }]);
+  });
+
+  it.each([
+    ['one extra space at the end', `${OLD_DEFAULT_RULES_V1_1_0} `],
+    ['a trailing newline', `${OLD_DEFAULT_RULES_V1_1_0}\n`],
+    ['one extra space inside', OLD_DEFAULT_RULES_V1_0.replace('1. Select', '1.  Select')],
+    ['a custom rule set', '# My rules\n1. Verify names in LCNAF.'],
+    ['the old default with one line edited', OLD_DEFAULT_RULES_V1_1_0.replace('1-6', '2-5')]
+  ])('%s → untouched', async (_, custom) => {
+    fakes.storage.seed({ settingsVersion: 2, activeProviderId: 'gemini', systemPromptRules: custom });
+    expect(await load()).toBe(custom);
+    expect(fakes.storage.data.get('systemPromptRules')).toBe(custom);
+    expect(rulesWrites()).toEqual([]);
+  });
+
+  it('absent or empty → the default', async () => {
+    expect(await load()).toBe(DEFAULT_RULES);
+    fakes.storage.seed({ systemPromptRules: '' });
+    expect(await load()).toBe(DEFAULT_RULES);
+    expect(fakes.storage.data.get('systemPromptRules')).toBe(DEFAULT_RULES);
+  });
+
+  it('two pages loading at once → one write', async () => {
+    fakes.storage.seed({ settingsVersion: 2, activeProviderId: 'gemini', systemPromptRules: OLD_DEFAULT_RULES_V1_1_0 });
+    const pageA = await openPage();
+    const pageB = await openPage();
+    const [a, b] = await Promise.all([pageA.loadSystemPromptRules(DEFAULT_RULES), pageB.loadSystemPromptRules(DEFAULT_RULES)]);
+    expect([a, b]).toEqual([DEFAULT_RULES, DEFAULT_RULES]);
+    expect(rulesWrites()).toHaveLength(1);
+  });
+
+  it('the cross-tab stale-editor rule is kept: another tab sees the migration as a stored change', async () => {
+    fakes.storage.seed({ settingsVersion: 2, activeProviderId: 'gemini', systemPromptRules: OLD_DEFAULT_RULES_V1_1_0 });
+    const page = await openPage();
+    const seen = [];
+    const off = page.onSettingsChanged((changes) => {
+      if (Object.hasOwn(changes, 'systemPromptRules')) seen.push(changes.systemPromptRules.newValue);
+    });
+    await page.loadSystemPromptRules(DEFAULT_RULES);
+    await flushEvents();
+    off();
+    expect(seen).toEqual([DEFAULT_RULES]);
+    // A dirty editor loaded from the OLD value is stale: its save is refused.
+    expect(await page.saveSystemPromptRules('edited', OLD_DEFAULT_RULES_V1_1_0)).toEqual({ saved: false, reason: 'stale' });
   });
 });

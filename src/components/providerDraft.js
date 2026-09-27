@@ -116,6 +116,43 @@ export const beginPermissionGesture = (entry, value) => {
 };
 
 /**
+ * Run a Settings action under the gesture rule. The permission request is
+ * started synchronously (first). A save locks the form until it completes.
+ * A DENIED request saves nothing, shows "Permission needed to contact <host>",
+ * and keeps the typed draft (the form is only unlocked).
+ * @param {object} entry - Registry entry
+ * @param {object} value - The draft (or the SAVED value, for Grant access)
+ * @param {()=>Promise<void>} work - The action after a granted request
+ * @param {{save?:boolean, setForm:Function, setBusy:Function, setMessages:Function,
+ *   recheck:Function, onError:Function}} ui - Form state setters and callbacks
+ * @returns {Promise<void>}
+ */
+export const runGestureAction = (entry, value, work, { save = false, setForm, setBusy, setMessages, recheck, onError }) => {
+  const gesture = beginPermissionGesture(entry, value);
+  if (!gesture.ok) {
+    setMessages([{ severity: 'error', text: gesture.reason }]);
+    return Promise.resolve();
+  }
+  setBusy(true);
+  if (save) setForm(beginSave);
+  setMessages([]);
+  return gesture.granted
+    .then(async (granted) => {
+      if (!granted) {
+        setMessages([{ severity: 'error', text: `Permission needed to contact ${gesture.host}` }]);
+        recheck();
+        return;
+      }
+      await work();
+    })
+    .catch(onError)
+    .finally(() => {
+      if (save) setForm(endSave);
+      setBusy(false);
+    });
+};
+
+/**
  * The permission origin of the SAVED configuration (never the draft), or null.
  * @param {object} entry - Registry entry
  * @param {object} stored - Stored `provider:<id>` value

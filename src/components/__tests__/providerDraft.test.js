@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   draftFromStored, initialDraftState, applyStoredChange, editDraft, afterSave, patchFromDraft, beginPermissionGesture,
-  beginSave, endSave, savedOrigin, watchSavedAccess
+  beginSave, endSave, savedOrigin, watchSavedAccess, runGestureAction
 } from '../providerDraft';
 import { saveProviderDraft, onSettingsChanged, providerKey } from '../../services/settings';
 import { resolveConfigFromDraft } from '../../services/providers/config';
@@ -201,5 +201,62 @@ describe('[row 14] permissions: the gesture rule', () => {
     fakes.permissions.request.mockImplementationOnce(() => Promise.reject(new Error('no gesture')));
     vi.spyOn(console, 'error').mockImplementation(() => {});
     expect(await beginPermissionGesture(entryOf('openai'), {}).granted).toBe(false);
+  });
+});
+
+describe('[P4 row 16] P3 queued fixes: a denied Save keeps the typed draft', () => {
+  const harness = (stored = {}) => {
+    const ui = { form: initialDraftState(stored), busy: false, messages: [] };
+    const setForm = (next) => { ui.form = typeof next === 'function' ? next(ui.form) : next; };
+    const opts = () => ({
+      setForm,
+      setBusy: (b) => { ui.busy = b; },
+      setMessages: (m) => { ui.messages = m; },
+      recheck: vi.fn(),
+      onError: vi.fn()
+    });
+    return { ui, setForm, opts };
+  };
+
+  it('Save denied: nothing is written, the message is shown, and the typed key and model stay in the form', async () => {
+    const { ui, setForm, opts } = harness({});
+    setForm((f) => editDraft(f, 'apiKey', 'sk-typed-by-user'));
+    setForm((f) => editDraft(f, 'model', 'openai/gpt-6'));
+    fakes.permissions.state.nextRequestResult = false;
+    const work = vi.fn(async () => saveProviderDraft('openrouter', patchFromDraft(entryOf('openrouter'), ui.form.draft), ui.form.base));
+    const callbacks = opts();
+    await runGestureAction(entryOf('openrouter'), ui.form.draft, work, { ...callbacks, save: true });
+    expect(fakes.permissions.request).toHaveBeenCalledWith({ origins: ['https://openrouter.ai/*'] });
+    expect(work).not.toHaveBeenCalled();
+    expect(fakes.storage.calls.set).toHaveLength(0);
+    expect(ui.messages).toEqual([{ severity: 'error', text: 'Permission needed to contact openrouter.ai' }]);
+    expect(callbacks.recheck).toHaveBeenCalled();
+    expect(ui.form.draft).toMatchObject({ apiKey: 'sk-typed-by-user', model: 'openai/gpt-6' });
+    expect(ui.form.dirty).toBe(true);
+    expect(ui.form.locked).toBe(false);
+    expect(ui.busy).toBe(false);
+  });
+
+  it('clicking Save again prompts again and, when granted, saves the same draft', async () => {
+    const { ui, setForm, opts } = harness({});
+    setForm((f) => editDraft(f, 'apiKey', 'sk-typed-by-user'));
+    fakes.permissions.state.nextRequestResult = false;
+    const save = () => runGestureAction(entryOf('openrouter'), ui.form.draft, async () => {
+      const result = await saveProviderDraft('openrouter', patchFromDraft(entryOf('openrouter'), ui.form.draft), ui.form.base);
+      setForm((f) => afterSave(f, result));
+    }, { ...opts(), save: true });
+    await save();
+    fakes.permissions.state.nextRequestResult = true;
+    await save();
+    expect(fakes.permissions.request).toHaveBeenCalledTimes(2);
+    expect(fakes.storage.data.get('provider:openrouter')).toMatchObject({ apiKey: 'sk-typed-by-user' });
+    expect(ui.form.draft.apiKey).toBe('sk-typed-by-user');
+    expect(ui.form.dirty).toBe(false);
+  });
+
+  it('the permission request is the first thing (synchronous)', () => {
+    const { ui, opts } = harness({});
+    runGestureAction(entryOf('deepseek'), ui.form.draft, vi.fn(), opts());
+    expect(fakes.permissions.request).toHaveBeenCalledTimes(1);
   });
 });

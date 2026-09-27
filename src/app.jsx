@@ -42,11 +42,11 @@ const theme = createTheme({
 
 // Step labels
 const steps = [
-    'Enter Bibliographic Information',
-    'Generate Initial Suggestions',
-    'Review Scraped Results',
-    'Final Recommendations',
-    'Conversation History'
+    'Describe the work',
+    'AI suggestions',
+    'Matches',
+    'Recommendations',
+    'History'
 ];
 
 const SETTINGS_HASH = '#settings';

@@ -1,93 +1,32 @@
 /**
- * Utility functions for calculating similarity between strings
+ * String similarity helpers. P4 uses the distance for the display-only
+ * "N% similar spelling" (pipeline/select.js); the colors and labels are used
+ * only to show scores saved by older versions.
  */
 
 /**
- * Calculate Levenshtein distance between two strings
+ * Levenshtein distance between two strings, counted in Unicode code points.
  * @param {string} a - First string
  * @param {string} b - Second string
  * @returns {number} - Levenshtein distance
  */
 export const levenshteinDistance = (a, b) => {
-  const matrix = Array(b.length + 1).fill().map(() => Array(a.length + 1).fill(0));
-
-  for (let i = 0; i <= a.length; i++) {
-    matrix[0][i] = i;
-  }
-
-  for (let j = 0; j <= b.length; j++) {
-    matrix[j][0] = j;
-  }
-
-  for (let j = 1; j <= b.length; j++) {
-    for (let i = 1; i <= a.length; i++) {
-      const substitutionCost = a[i - 1] === b[j - 1] ? 0 : 1;
-      matrix[j][i] = Math.min(
-        matrix[j][i - 1] + 1, // deletion
-        matrix[j - 1][i] + 1, // insertion
-        matrix[j - 1][i - 1] + substitutionCost // substitution
-      );
+  const x = [...String(a ?? '')];
+  const y = [...String(b ?? '')];
+  let prev = Array.from({ length: x.length + 1 }, (_, i) => i);
+  for (let j = 1; j <= y.length; j++) {
+    const row = [j];
+    for (let i = 1; i <= x.length; i++) {
+      const substitutionCost = x[i - 1] === y[j - 1] ? 0 : 1;
+      row[i] = Math.min(row[i - 1] + 1, prev[i] + 1, prev[i - 1] + substitutionCost);
     }
+    prev = row;
   }
-
-  return matrix[b.length][a.length];
+  return prev[x.length];
 };
 
 /**
- * Calculate similarity score between two strings (0-100)
- * @param {string} a - First string
- * @param {string} b - Second string
- * @returns {number} - Similarity score (0-100)
- */
-export const calculateSimilarity = (a, b) => {
-  if (!a || !b) return 0;
-  
-  const aLower = a.toLowerCase();
-  const bLower = b.toLowerCase();
-  
-  // Exact match
-  if (aLower === bLower) return 100;
-  
-  // Calculate Levenshtein distance
-  const distance = levenshteinDistance(aLower, bLower);
-  
-  // Calculate similarity score (0-100)
-  const maxLength = Math.max(aLower.length, bLower.length);
-  const similarity = Math.max(0, Math.round((1 - distance / maxLength) * 100));
-  
-  return similarity;
-};
-
-/**
- * Find the best match for a term in a list of items
- * @param {string} term - The term to match
- * @param {Array} items - Array of items with heading property
- * @returns {Object} - Best match with similarity score
- */
-export const findBestMatch = (term, items) => {
-  if (!items || items.length === 0) {
-    return { item: null, similarity: 0 };
-  }
-  
-  let bestMatch = null;
-  let highestSimilarity = 0;
-  
-  items.forEach(item => {
-    const similarity = calculateSimilarity(term, item.heading);
-    if (similarity > highestSimilarity) {
-      highestSimilarity = similarity;
-      bestMatch = item;
-    }
-  });
-  
-  return {
-    item: bestMatch,
-    similarity: highestSimilarity
-  };
-};
-
-/**
- * Get a color based on similarity score
+ * Get a color based on a similarity score
  * @param {number} score - Similarity score (0-100)
  * @returns {string} - Color code
  */
@@ -100,7 +39,7 @@ export const getSimilarityColor = (score) => {
 };
 
 /**
- * Get a text label based on similarity score
+ * Get a text label based on a similarity score
  * @param {number} score - Similarity score (0-100)
  * @returns {string} - Text label
  */
@@ -113,8 +52,7 @@ export const getSimilarityLabel = (score) => {
 };
 
 export default {
-  calculateSimilarity,
-  findBestMatch,
+  levenshteinDistance,
   getSimilarityColor,
   getSimilarityLabel
-}; 
+};

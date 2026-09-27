@@ -53,15 +53,30 @@ describe('[row 3] registry', () => {
     }
   });
 
-  it('every region origin is in manifest optional_host_permissions', () => {
+  it('every region origin is in the manifest (optional, or required for Gemini)', () => {
     const optional = manifest.optional_host_permissions;
     for (const entry of PROVIDERS) {
       for (const { baseURL } of Object.values(entry.regions || {})) {
-        expect(optional).toContain(originFor({ entry, baseURL }));
+        const origin = originFor({ entry, baseURL });
+        if (entry.id === 'gemini') expect(manifest.host_permissions).toContain(origin);
+        else expect(optional).toContain(origin);
       }
     }
     for (const extra of ['https://*/*', 'http://localhost/*', 'http://127.0.0.1/*']) expect(optional).toContain(extra);
     expect(manifest.host_permissions).toContain('https://id.loc.gov/*');
     expect(manifest.permissions).toEqual(['storage']);
+  });
+});
+
+describe('[P4 row 16] P3 queued fixes: the manifest', () => {
+  it('the optional list lacks the Gemini origin (it is a required host permission; no duplicate)', () => {
+    expect(manifest.optional_host_permissions).not.toContain('https://generativelanguage.googleapis.com/*');
+    expect(manifest.host_permissions).toContain('https://generativelanguage.googleapis.com/*');
+    const both = manifest.optional_host_permissions.filter((o) => manifest.host_permissions.includes(o));
+    expect(both).toEqual([]);
+  });
+
+  it('the new description', () => {
+    expect(manifest.description).toBe('Suggests Library of Congress Subject Headings with your choice of AI provider');
   });
 });

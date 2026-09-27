@@ -23,8 +23,7 @@ const SystemPromptEditor = () => {
         saveSystemPromptRules,
         resetSystemPromptRules,
         reloadSystemPromptRules,
-        systemPromptStale,
-        DEFAULT_SYSTEM_PROMPT_RULES
+        systemPromptStale
     } = useAppContext();
 
     const [expanded, setExpanded] = useState(false);
@@ -90,8 +89,8 @@ const SystemPromptEditor = () => {
             <AccordionDetails>
                 <Box>
                     <Typography variant="body2" color="text.secondary" paragraph>
-                        These rules guide the AI in selecting appropriate Library of Congress Subject Headings.
-                        Edit them to customize the behavior of the recommendation system.
+                        These rules guide the AI when it suggests Library of Congress Subject Headings.
+                        They are added after the fixed instructions of the tool, which win if the two conflict.
                     </Typography>
 
                     {systemPromptStale && (

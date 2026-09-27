@@ -1,515 +1,163 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import {
-    Box,
-    Typography,
-    Paper,
-    Button,
-    Divider,
-    List,
-    ListItem,
-    ListItemText,
-    Chip,
-    CircularProgress,
-    Alert,
-    Card,
-    CardContent,
-    CardActions,
-    IconButton,
-    Snackbar,
-    Grid,
-    TextField,
-    Tooltip,
-    Link as MuiLink
+  Box, Typography, Button, Chip, Alert, Card, CardContent, IconButton, Snackbar, Link, List, ListItem, ListItemText,
+  CircularProgress
 } from '@mui/material';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
-import CheckCircleIcon from '@mui/icons-material/CheckCircle';
-import ErrorIcon from '@mui/icons-material/Error';
 import { useAppContext } from '../context/AppContext';
-import SimilarityScore from './SimilarityScore';
-import { legacyGenerateMarc, describeActiveProvider, logWorkflowError } from '../services/legacyBridge';
-import ReactMarkdown from 'react-markdown';
-
-const escapeCsvCell = (value) => {
-    const stringValue = value === undefined || value === null ? '' : String(value);
-    const safeValue = /^[=+\-@]/.test(stringValue.trimStart()) ? `'${stringValue}` : stringValue;
-
-    return `"${safeValue.replace(/"/g, '""')}"`;
-};
+import { selectionsOf } from '../services/pipeline/run';
+import { subdivisionNote } from '../services/pipeline/select';
+import { copyAllText, recommendationsCsv } from '../services/pipeline/exports';
+import { NONE_REASON_WORDS } from '../services/pipeline/types';
+import { methodText, authorityLabel, lcLink } from './pipelineText';
 
 /**
- * Builds the conversation history record saved by "Save & View History"
- * @param {object} parts - Workflow results and the two provenance values ({providerId, model} or null)
- * @returns {object} - The record passed to saveConversation()
+ * Step 4 content: one card per Recommendation, then the suggestions without
+ * an LC heading (also used read-only by history).
+ * @param {{recommendations:object[], selections:object[], suggestions:object[], onCopy?:Function}} props - Results
+ * @returns {JSX.Element}
  */
-export const buildConversationRecord = ({
-  bibliographicInfo,
-  initialSuggestions,
-  sortedRecommendations,
-  selectedRecommendations,
-  averageSimilarity,
-  marcRecords,
-  suggestionProvenance,
-  marcProvenance
-}) => ({
-  bibliographicInfo,
-  initialSuggestions,
-  finalRecommendations: sortedRecommendations,
-  selectedRecommendations: selectedRecommendations.length > 0 ? selectedRecommendations : sortedRecommendations,
-  averageSimilarity,
-  marcRecords,
-  suggestionProvenance: suggestionProvenance || null,
-  marcProvenance: marcProvenance || null
-});
+export const RecommendationsPanel = ({ recommendations, selections, suggestions, onCopy }) => {
+  const withoutHeading = selections.filter((s) => !s.cid);
+  const headingOf = (id) => suggestions.find((s) => s.id === id)?.heading || id;
+  return (
+    <Box>
+      {recommendations.length === 0 && (
+        <Typography color="text.secondary" sx={{ mb: 2 }}>No LC heading was chosen.</Typography>
+      )}
+      {recommendations.map((rec) => {
+        const note = subdivisionNote(rec, selections);
+        return (
+          <Card key={rec.cid} variant="outlined" sx={{ mb: 2 }}>
+            <CardContent>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+                <Typography variant="subtitle1">{rec.label}</Typography>
+                <Chip size="small" label={authorityLabel(rec.authority)} />
+              </Box>
+              <Typography variant="body2" color="text.secondary">
+                LC ID: {rec.localId} · <Link href={lcLink(rec.uri)} target="_blank" rel="noopener noreferrer">{lcLink(rec.uri)}</Link>
+              </Typography>
+              <Typography variant="body2" sx={{ mt: 0.5 }}>
+                {rec.selections.map((s) => methodText(s)).join(' · ')}
+              </Typography>
+              {rec.marc.status === 'from-authority' ? (
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1 }}>
+                  <Typography variant="caption" color="text.secondary">MARC field (text form):</Typography>
+                  <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>{rec.marc.text}</Typography>
+                  {onCopy && (
+                    <IconButton size="small" aria-label="Copy MARC field" onClick={() => onCopy(rec.marc.text)}>
+                      <ContentCopyIcon fontSize="small" />
+                    </IconButton>
+                  )}
+                </Box>
+              ) : (
+                <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                  MARC not available ({rec.marc.reason})
+                </Typography>
+              )}
+              {note && <Alert severity="info" sx={{ mt: 1 }}>{note}</Alert>}
+            </CardContent>
+          </Card>
+        );
+      })}
+      {withoutHeading.length > 0 && (
+        <Box sx={{ mt: 3 }}>
+          <Typography variant="subtitle1">Suggestions without an LC heading</Typography>
+          <List dense>
+            {withoutHeading.map((s) => (
+              <ListItem key={s.suggestionId} divider>
+                <ListItemText
+                  primary={`${headingOf(s.suggestionId)} (AI suggestion)`}
+                  secondary={NONE_REASON_WORDS[s.noneReason] || 'no candidate was chosen'}
+                />
+              </ListItem>
+            ))}
+          </List>
+        </Box>
+      )}
+    </Box>
+  );
+};
 
 const FinalRecommendations = () => {
-    const {
-        bibliographicInfo,
-        initialSuggestions,
-        finalRecommendations,
-        setActiveStep,
-        saveConversation,
-        error,
-        setError,
-        suggestionProvenance,
-        isLoading,
-        setIsLoading
-    } = useAppContext();
+  const { run, setActiveStep, saveRunToHistory } = useAppContext();
+  const [snackbar, setSnackbar] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState(null);
+  const recommendations = run.recommendations || [];
+  const selections = selectionsOf(run);
 
-    const [snackbarOpen, setSnackbarOpen] = useState(false);
-    const [snackbarMessage, setSnackbarMessage] = useState('');
-    const [selectedRecommendations, setSelectedRecommendations] = useState([]);
-    const [averageSimilarity, setAverageSimilarity] = useState(0);
-    const [sortedRecommendations, setSortedRecommendations] = useState([]);
-    const [marcRecords, setMarcRecords] = useState({});
-    const [processingMarc, setProcessingMarc] = useState(false);
-    const [marcError, setMarcError] = useState(null);
-    const [marcProvenance, setMarcProvenance] = useState(null);
-    const [providerLabel, setProviderLabel] = useState('');
+  const handleCopy = (text) => {
+    navigator.clipboard.writeText(text)
+      .then(() => setSnackbar('Copied to clipboard'))
+      .catch(() => setSnackbar('Failed to copy to clipboard'));
+  };
 
-    // Sort recommendations and calculate average similarity when component mounts
-    useEffect(() => {
-        if (finalRecommendations && finalRecommendations.length > 0) {
-            // Sort recommendations by similarity score in descending order
-            const sorted = [...finalRecommendations].sort((a, b) =>
-                (b.similarity || 0) - (a.similarity || 0)
-            );
-            setSortedRecommendations(sorted);
-
-            // Calculate average similarity
-            const validRecommendations = finalRecommendations.filter(rec => rec.similarity !== undefined);
-            if (validRecommendations.length > 0) {
-                const totalSimilarity = validRecommendations.reduce((sum, rec) => sum + (rec.similarity || 0), 0);
-                setAverageSimilarity(Math.round(totalSimilarity / validRecommendations.length));
-            }
-
-            // Generate MARC records for high-scoring terms
-            generateMarcRecordsForHighScoring(sorted);
-        }
-    }, [finalRecommendations]);
-
-    // Generate MARC records for high-scoring terms
-    const generateMarcRecordsForHighScoring = async (recommendations) => {
-      try {
-        setProcessingMarc(true);
-        setMarcError(null);
-        describeActiveProvider().then(setProviderLabel).catch(() => setProviderLabel(''));
-        const result = await legacyGenerateMarc(recommendations);
-        setMarcRecords(result.marcRecords);
-        setMarcProvenance(result.provenance);
-      } catch (err) {
-        logWorkflowError('Error generating MARC records:', err);
-        // Show the error inline in the MARC status area, with a Retry button
-        setMarcError(err.message || 'Failed to generate MARC records');
-      } finally {
-        setProcessingMarc(false);
-      }
-    };
-
-    // Retry MARC generation after an error
-    const handleRetryMarc = () => {
-      generateMarcRecordsForHighScoring(sortedRecommendations);
-    };
-
-    // Handle back button
-    const handleBack = () => {
-        setActiveStep(2);
-    };
-
-    // Handle save and view history
-    const handleSaveAndViewHistory = () => {
-        try {
-            // Save the conversation to history
-            saveConversation(buildConversationRecord({
-              bibliographicInfo,
-              initialSuggestions,
-              sortedRecommendations,
-              selectedRecommendations,
-              averageSimilarity,
-              marcRecords,
-              suggestionProvenance,
-              marcProvenance
-            }));
-
-            // Show success message
-            showSnackbar('Conversation saved to history');
-
-            // Move to the history step
-            setActiveStep(4);
-        } catch (err) {
-            setError(err.message || 'Failed to save conversation');
-            console.error('Error saving conversation:', err);
-        }
-    };
-
-    // Handle copy to clipboard
-    const handleCopyToClipboard = (text) => {
-        navigator.clipboard.writeText(text)
-            .then(() => {
-                showSnackbar('Copied to clipboard');
-            })
-            .catch((err) => {
-                console.error('Failed to copy:', err);
-                showSnackbar('Failed to copy to clipboard', 'error');
-            });
-    };
-
-    // Handle copy all to clipboard
-    const handleCopyAllToClipboard = () => {
-        const recommendations = selectedRecommendations.length > 0 ? selectedRecommendations : sortedRecommendations;
-
-        const text = recommendations
-            .filter(rec => rec.similarity > 30 && rec.bestMatch)
-            .map(rec => {
-                const marc = marcRecords[rec.term] || rec.marc;
-                return `${rec.bestMatch.heading}\n${marc}\n${rec.justification}\n`;
-            }).join('\n');
-
-        handleCopyToClipboard(text);
-    };
-
-    // Handle export as CSV
-    const handleExportCsv = () => {
-        const recommendations = selectedRecommendations.length > 0 ? selectedRecommendations : sortedRecommendations;
-
-        const csvContent = [
-            ['LCSH Term', 'MARC Record', 'LCSH ID', 'Justification', 'Similarity Score'],
-            ...recommendations
-                .filter(rec => rec.similarity > 30 && rec.bestMatch)
-                .map(rec => [
-                    rec.bestMatch.heading,
-                    marcRecords[rec.term] || rec.marc,
-                    rec.bestMatch.identifier || 'N/A',
-                    rec.justification,
-                    rec.similarity || 0
-                ])
-        ].map(row => row.map(escapeCsvCell).join(',')).join('\n');
-
-        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.setAttribute('href', url);
-        link.setAttribute('download', 'lcsh_recommendations.csv');
-        link.style.visibility = 'hidden';
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-
-        showSnackbar('CSV file downloaded');
-    };
-
-    // Show snackbar
-    const showSnackbar = (message) => {
-        setSnackbarMessage(message);
-        setSnackbarOpen(true);
-    };
-
-    // Handle snackbar close
-    const handleSnackbarClose = () => {
-        setSnackbarOpen(false);
-    };
-
-    // Toggle recommendation selection
-    const toggleRecommendationSelection = (recommendation) => {
-        const isSelected = selectedRecommendations.some(rec => rec.term === recommendation.term);
-
-        if (isSelected) {
-            setSelectedRecommendations(selectedRecommendations.filter(rec => rec.term !== recommendation.term));
-        } else {
-            setSelectedRecommendations([...selectedRecommendations, recommendation]);
-        }
-    };
-
-    // If there are no final recommendations, show a message
-    if (!finalRecommendations || finalRecommendations.length === 0) {
-        return (
-            <Box sx={{ textAlign: 'center', py: 4 }}>
-                <Typography variant="h6" color="text.secondary">
-                    No final recommendations available. Please go back and process the scraped results first.
-                </Typography>
-                <Button
-                    variant="contained"
-                    color="primary"
-                    onClick={handleBack}
-                    sx={{ mt: 2 }}
-                >
-                    Back to Scraped Results
-                </Button>
-            </Box>
-        );
+  const handleExportCsv = () => {
+    const blob = new Blob([recommendationsCsv(recommendations, selections)], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    try {
+      const link = document.createElement('a');
+      link.setAttribute('href', url);
+      link.setAttribute('download', 'lcsh_recommendations.csv');
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } finally {
+      URL.revokeObjectURL(url);
     }
+    setSnackbar('CSV file downloaded');
+  };
 
-    // Filter recommendations with similarity score > 30 and that have a best match
-    const highScoringRecommendations = sortedRecommendations.filter(rec =>
-        (rec.similarity || 0) > 30 && rec.bestMatch
-    );
+  // "Saved" is shown only after the storage write is confirmed
+  const handleSave = async () => {
+    setSaving(true);
+    setSaveError(null);
+    try {
+      await saveRunToHistory();
+      setSnackbar('Saved');
+      setActiveStep(4);
+    } catch (err) {
+      setSaveError(err?.message || 'The history could not be saved.');
+    } finally {
+      setSaving(false);
+    }
+  };
 
+  if (run.recommendations === null) {
     return (
-        <Box>
-            <Typography variant="h6" gutterBottom>
-                Final LCSH Recommendations
-            </Typography>
-
-            {error && (
-                <Alert severity="error" sx={{ mb: 2 }}>
-                    {error}
-                </Alert>
-            )}
-
-            {/* Overall similarity score */}
-            <Card variant="outlined" sx={{ mb: 3 }}>
-                <CardContent>
-                    <Typography variant="subtitle1" gutterBottom>
-                        Overall Validation Score
-                    </Typography>
-                    <Box sx={{ maxWidth: 400, mx: 'auto', my: 2 }}>
-                        <SimilarityScore
-                            score={averageSimilarity}
-                            label="Average similarity between recommended terms and LOC results"
-                            showTooltip={false}
-                        />
-                    </Box>
-                    <Typography variant="body2" color="text.secondary" align="center">
-                        This score indicates how well the recommended terms match the actual Library of Congress Subject Headings.
-                    </Typography>
-                </CardContent>
-            </Card>
-
-            <Box sx={{ mb: 3 }}>
-                <Typography variant="body2" color="text.secondary" paragraph>
-                    Below are the final LCSH recommendations based on the best matches found in the Library of Congress database.
-                    Only terms with similarity scores above 30% are shown. Results are sorted by similarity score in descending order.
-                    MARC records use field 650 (Topical Terms), 651 (Geographic Names), 600 (Personal Names), or 610 (Corporate Names).
-                </Typography>
-
-                <Box sx={{ display: 'flex', gap: 2, mb: 2 }}>
-                    <Button
-                        variant="outlined"
-                        startIcon={<ContentCopyIcon />}
-                        onClick={handleCopyAllToClipboard}
-                    >
-                        Copy All
-                    </Button>
-                    <Button
-                        variant="outlined"
-                        onClick={handleExportCsv}
-                    >
-                        Export CSV
-                    </Button>
-                </Box>
-            </Box>
-
-            {processingMarc && (
-                <Box sx={{ display: 'flex', alignItems: 'center', mb: 3, gap: 1, flexWrap: 'wrap' }}>
-                    <CircularProgress size={24} sx={{ mr: 1 }} />
-                    <Typography>Generating MARC records for high-scoring terms...</Typography>
-                    {providerLabel && (
-                      <Typography variant="body2" color="text.secondary">
-                        ({providerLabel})
-                      </Typography>
-                    )}
-                </Box>
-            )}
-
-            {!processingMarc && marcError && (
-              <Alert
-                severity="error"
-                sx={{ mb: 3 }}
-                action={(
-                  <Button color="inherit" size="small" onClick={handleRetryMarc}>
-                    Retry MARC generation
-                  </Button>
-                )}
-              >
-                {marcError}
-                {providerLabel && ` (${providerLabel})`}
-              </Alert>
-            )}
-
-            {highScoringRecommendations.length === 0 ? (
-                <Alert severity="warning" sx={{ mb: 3 }}>
-                    No recommendations with similarity scores above 30% and valid LOC matches were found. Consider refining your search or using different bibliographic information.
-                </Alert>
-            ) : (
-                <List>
-                    {highScoringRecommendations.map((recommendation, index) => {
-                        const isSelected = selectedRecommendations.some(rec => rec.term === recommendation.term);
-                        const marcRecord = marcRecords[recommendation.term] || recommendation.marc;
-                        const bestMatch = recommendation.bestMatch;
-
-                        return (
-                            <Paper
-                                key={index}
-                                variant="outlined"
-                                sx={{
-                                    mb: 2,
-                                    p: 2,
-                                    border: isSelected ? '2px solid #1976d2' : '1px solid rgba(0, 0, 0, 0.12)'
-                                }}
-                            >
-                                <Grid container spacing={2}>
-                                    <Grid item xs={12} sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
-                                            <Typography variant="h6">
-                                                {bestMatch.heading}
-                                            </Typography>
-                                            {bestMatch.source && (
-                                                <Chip
-                                                    label={bestMatch.source === 'lcnaf' ? 'LCNAF' : 'LCSH'}
-                                                    size="small"
-                                                    variant="outlined"
-                                                    color={bestMatch.source === 'lcnaf' ? 'secondary' : 'primary'}
-                                                />
-                                            )}
-                                            {bestMatch.uri && (
-                                                <MuiLink
-                                                    href={bestMatch.uri.startsWith('http') ? bestMatch.uri : `https://id.loc.gov${bestMatch.uri}`}
-                                                    target="_blank"
-                                                    rel="noopener noreferrer"
-                                                    sx={{ ml: 1 }}
-                                                >
-                                                    View on LOC
-                                                </MuiLink>
-                                            )}
-                                        </Box>
-
-                                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                                            <Tooltip title={`Similarity score: ${recommendation.similarity}%`}>
-                                                <Chip
-                                                    label={`${recommendation.similarity}% match`}
-                                                    color={recommendation.similarity >= 70 ? "success" : recommendation.similarity >= 50 ? "warning" : "error"}
-                                                    size="small"
-                                                />
-                                            </Tooltip>
-
-                                            <Tooltip title="Copy to clipboard">
-                                                <IconButton
-                                                    size="small"
-                                                    onClick={() => handleCopyToClipboard(bestMatch.heading)}
-                                                >
-                                                    <ContentCopyIcon fontSize="small" />
-                                                </IconButton>
-                                            </Tooltip>
-
-                                            <Button
-                                                variant={isSelected ? "contained" : "outlined"}
-                                                size="small"
-                                                onClick={() => toggleRecommendationSelection(recommendation)}
-                                            >
-                                                {isSelected ? 'Selected' : 'Select'}
-                                            </Button>
-                                        </Box>
-                                    </Grid>
-
-                                    {recommendation.similarity !== undefined && (
-                                        <Grid item xs={12}>
-                                            <Box sx={{ maxWidth: 300 }}>
-                                                <SimilarityScore score={recommendation.similarity} label="Similarity to suggested term" />
-                                            </Box>
-                                        </Grid>
-                                    )}
-
-                                    <Grid item xs={12}>
-                                        <Typography variant="subtitle2">LCSH ID:</Typography>
-                                        <Typography variant="body2">{bestMatch.identifier || 'N/A'}</Typography>
-                                    </Grid>
-
-                                    <Grid item xs={12}>
-                                        <Typography variant="subtitle2">MARC Record:</Typography>
-                                        <TextField
-                                            fullWidth
-                                            variant="outlined"
-                                            size="small"
-                                            value={marcRecord}
-                                            InputProps={{
-                                                readOnly: true,
-                                                endAdornment: (
-                                                    <IconButton
-                                                        size="small"
-                                                        onClick={() => handleCopyToClipboard(marcRecord)}
-                                                    >
-                                                        <ContentCopyIcon fontSize="small" />
-                                                    </IconButton>
-                                                )
-                                            }}
-                                            sx={{ fontFamily: 'monospace', mb: 2 }}
-                                        />
-                                    </Grid>
-
-                                    <Grid item xs={12}>
-                                        <Typography variant="subtitle2">Justification:</Typography>
-                                        <Typography variant="body2">{recommendation.justification}</Typography>
-                                    </Grid>
-
-                                    <Grid item xs={12}>
-                                        <Typography variant="subtitle2">Original Suggested Term:</Typography>
-                                        <Typography variant="body2">{recommendation.term}</Typography>
-                                    </Grid>
-                                </Grid>
-                            </Paper>
-                        );
-                    })}
-                </List>
-            )}
-
-            {initialSuggestions && initialSuggestions.specialConsiderations && (
-                <Box sx={{ mt: 3, mb: 3 }}>
-                    <Typography variant="subtitle1" gutterBottom>
-                        Special Considerations
-                    </Typography>
-                    <Paper variant="outlined" sx={{ p: 2 }}>
-                        <ReactMarkdown>
-                            {initialSuggestions.specialConsiderations}
-                        </ReactMarkdown>
-                    </Paper>
-                </Box>
-            )}
-
-            <Box sx={{ mt: 3, display: 'flex', justifyContent: 'space-between' }}>
-                <Button
-                    variant="outlined"
-                    color="primary"
-                    onClick={handleBack}
-                >
-                    Back
-                </Button>
-
-                <Button
-                    variant="contained"
-                    color="primary"
-                    onClick={handleSaveAndViewHistory}
-                >
-                    Save & View History
-                </Button>
-            </Box>
-
-            <Snackbar
-                open={snackbarOpen}
-                autoHideDuration={3000}
-                onClose={handleSnackbarClose}
-                message={snackbarMessage}
-            />
-        </Box>
+      <Box sx={{ textAlign: 'center', py: 4 }}>
+        <Typography variant="h6" color="text.secondary">No recommendations yet. Go back and choose headings first.</Typography>
+        <Button variant="contained" onClick={() => setActiveStep(2)} sx={{ mt: 2 }}>Back to Matches</Button>
+      </Box>
     );
+  }
+
+  return (
+    <Box>
+      <Typography variant="h6" gutterBottom>Recommendations</Typography>
+      {saveError && <Alert severity="error" sx={{ mb: 2 }}>{saveError}</Alert>}
+      <RecommendationsPanel
+        recommendations={recommendations}
+        selections={selections}
+        suggestions={run.suggest?.suggestions || []}
+        onCopy={handleCopy}
+      />
+      <Box sx={{ mt: 3, display: 'flex', justifyContent: 'space-between', gap: 2 }}>
+        <Button variant="outlined" onClick={() => setActiveStep(2)}>Back</Button>
+        <Box sx={{ display: 'flex', gap: 2 }}>
+          <Button variant="outlined" onClick={() => handleCopy(copyAllText(recommendations, selections))} disabled={recommendations.length === 0}>
+            Copy all
+          </Button>
+          <Button variant="outlined" onClick={handleExportCsv} disabled={recommendations.length === 0}>Export CSV</Button>
+          <Button variant="contained" onClick={handleSave} disabled={saving}>
+            {saving ? <><CircularProgress size={18} sx={{ mr: 1 }} />Saving…</> : 'Save to history'}
+          </Button>
+        </Box>
+      </Box>
+      <Snackbar open={Boolean(snackbar)} autoHideDuration={3000} onClose={() => setSnackbar('')} message={snackbar} />
+    </Box>
+  );
 };
 
 export default FinalRecommendations;

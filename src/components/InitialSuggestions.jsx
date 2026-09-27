@@ -1,236 +1,80 @@
-import React, { useState } from 'react';
+import React from 'react';
 import {
-    Box,
-    Typography,
-    Paper,
-    Button,
-    List,
-    ListItem,
-    ListItemText,
-    Chip,
-    CircularProgress,
-    Alert,
-    Card,
-    CardContent,
-    Grid,
-    LinearProgress
+  Box, Typography, Button, List, ListItem, ListItemText, Chip, Alert, Card, CardContent
 } from '@mui/material';
 import { useAppContext } from '../context/AppContext';
-import { validateMultipleTerms } from '../services/locService';
-import ImageIcon from '@mui/icons-material/Image';
+import { TEXT_FALLBACK_NOTICE } from '../services/pipeline/suggest';
+import { SUGGESTION_NOTE } from './pipelineText';
+
+/**
+ * Step 2 content: the subject analysis and the AI suggestions (also used read-only by history).
+ * @param {{suggest:{subjectAnalysis:string, suggestions:object[], suggestMode:string}}} props - Step 1 result
+ * @returns {JSX.Element}
+ */
+export const SuggestionsPanel = ({ suggest }) => (
+  <Box>
+    {suggest.suggestMode === 'text-fallback' && (
+      <Alert severity="warning" sx={{ mb: 2 }}>{TEXT_FALLBACK_NOTICE}</Alert>
+    )}
+    {suggest.subjectAnalysis && (
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <CardContent>
+          <Typography variant="subtitle1" gutterBottom>Subject analysis</Typography>
+          <Typography variant="body2" color="text.secondary">{suggest.subjectAnalysis}</Typography>
+        </CardContent>
+      </Card>
+    )}
+    <Alert severity="info" sx={{ mb: 2 }}>{SUGGESTION_NOTE}</Alert>
+    <List>
+      {suggest.suggestions.map((s) => (
+        <ListItem key={s.id} divider>
+          <ListItemText
+            primary={(
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Typography variant="body1">{s.heading}</Typography>
+                <Chip size="small" variant="outlined" label={`AI suggestion · ${s.kind}`} />
+              </Box>
+            )}
+            secondary={s.reason || null}
+          />
+        </ListItem>
+      ))}
+    </List>
+  </Box>
+);
 
 const InitialSuggestions = () => {
-    const {
-        initialSuggestions,
-        bibliographicInfo,
-        setActiveStep,
-        setScrapedResults,
-        setIsLoading,
-        isLoading,
-        error,
-        setError
-    } = useAppContext();
+  const { run, workflow, setActiveStep } = useAppContext();
 
-    const [progress, setProgress] = useState({ completed: 0, total: 0 });
+  const handleBack = () => setActiveStep(0);
 
-    // Handle back button
-    const handleBack = () => {
-        setActiveStep(0);
-    };
+  // Start the lookups and move to the Matches step, where the results arrive
+  const handleLookup = () => {
+    workflow.lookupAll();
+    setActiveStep(2);
+  };
 
-    // Handle continue button — now uses API instead of web scraping
-    const handleContinue = async () => {
-        try {
-            setIsLoading(true);
-            setError(null);
-
-            const terms = initialSuggestions.candidateTerms;
-            setProgress({ completed: 0, total: terms.length });
-
-            // Validate terms using LOC suggest2 API with progress tracking
-            const results = await validateMultipleTerms(terms, (completed, total) => {
-                setProgress({ completed, total });
-            });
-
-            // Store the results in the context
-            setScrapedResults(results);
-
-            // Move to the next step
-            setActiveStep(2);
-        } catch (err) {
-            setError(err.message || 'Failed to validate terms with LOC');
-            console.error('Error validating terms:', err);
-        } finally {
-            setIsLoading(false);
-            setProgress({ completed: 0, total: 0 });
-        }
-    };
-
-    // If there are no initial suggestions, show a message
-    if (!initialSuggestions || !initialSuggestions.candidateTerms) {
-        return (
-            <Box sx={{ textAlign: 'center', py: 4 }}>
-                <Typography variant="h6" color="text.secondary">
-                    No suggestions available. Please go back and generate suggestions first.
-                </Typography>
-                <Button
-                    variant="contained"
-                    color="primary"
-                    onClick={handleBack}
-                    sx={{ mt: 2 }}
-                >
-                    Back to Bibliographic Information
-                </Button>
-            </Box>
-        );
-    }
-
-    const progressPercent = progress.total > 0
-        ? Math.round((progress.completed / progress.total) * 100)
-        : 0;
-
+  if (!run.suggest) {
     return (
-        <Box>
-            <Typography variant="h6" gutterBottom>
-                Initial LCSH Suggestions
-            </Typography>
-
-            {error && (
-                <Alert severity="error" sx={{ mb: 2 }}>
-                    {error}
-                </Alert>
-            )}
-
-            <Card variant="outlined" sx={{ mb: 3 }}>
-                <CardContent>
-                    <Typography variant="subtitle1" gutterBottom>
-                        Subject Analysis
-                    </Typography>
-                    <Typography variant="body2" color="text.secondary" paragraph>
-                        {initialSuggestions.subjectAnalysis}
-                    </Typography>
-                </CardContent>
-            </Card>
-
-            {/* Display bibliographic information summary */}
-            <Card variant="outlined" sx={{ mb: 3 }}>
-                <CardContent>
-                    <Typography variant="subtitle1" gutterBottom>
-                        Bibliographic Information Used
-                    </Typography>
-
-                    <Grid container spacing={2}>
-                        <Grid item xs={12} sm={6}>
-                            <Typography variant="body2">
-                                <strong>Title:</strong> {bibliographicInfo.title || 'N/A'}
-                            </Typography>
-                        </Grid>
-
-                        <Grid item xs={12} sm={6}>
-                            <Typography variant="body2">
-                                <strong>Author:</strong> {bibliographicInfo.author || 'N/A'}
-                            </Typography>
-                        </Grid>
-
-                        {bibliographicInfo.abstract && (
-                            <Grid item xs={12}>
-                                <Typography variant="body2">
-                                    <strong>Abstract:</strong> {bibliographicInfo.abstract.substring(0, 100)}
-                                    {bibliographicInfo.abstract.length > 100 ? '...' : ''}
-                                </Typography>
-                            </Grid>
-                        )}
-
-                        {bibliographicInfo.images && bibliographicInfo.images.length > 0 && (
-                            <Grid item xs={12}>
-                                <Typography variant="body2" sx={{ display: 'flex', alignItems: 'center' }}>
-                                    <ImageIcon fontSize="small" sx={{ mr: 0.5 }} />
-                                    <strong>Images:</strong>&nbsp;{bibliographicInfo.images.length} image(s) uploaded
-                                </Typography>
-                                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mt: 1 }}>
-                                    {bibliographicInfo.images.map((image, index) => (
-                                        <Chip
-                                            key={index}
-                                            label={image.name || `Image ${index + 1}`}
-                                            size="small"
-                                            variant="outlined"
-                                        />
-                                    ))}
-                                </Box>
-                            </Grid>
-                        )}
-                    </Grid>
-                </CardContent>
-            </Card>
-
-            <Typography variant="subtitle1" gutterBottom>
-                Candidate Terms for Validation
-            </Typography>
-
-            <List>
-                {initialSuggestions.candidateTerms.map((term, index) => (
-                    <ListItem key={index} divider>
-                        <ListItemText primary={term} />
-                    </ListItem>
-                ))}
-            </List>
-
-            <Box sx={{ mt: 4 }}>
-                <Typography variant="subtitle1" gutterBottom>
-                    Raw Response from Gemini API
-                </Typography>
-                <Paper
-                    variant="outlined"
-                    sx={{
-                        p: 2,
-                        maxHeight: '300px',
-                        overflow: 'auto',
-                        fontFamily: 'monospace',
-                        fontSize: '0.875rem',
-                        whiteSpace: 'pre-wrap'
-                    }}
-                >
-                    {initialSuggestions.rawResponse}
-                </Paper>
-            </Box>
-
-            <Box sx={{ mt: 3, display: 'flex', justifyContent: 'space-between' }}>
-                <Button
-                    variant="outlined"
-                    color="primary"
-                    onClick={handleBack}
-                >
-                    Back
-                </Button>
-
-                <Button
-                    variant="contained"
-                    color="primary"
-                    onClick={handleContinue}
-                    disabled={isLoading}
-                >
-                    {isLoading ? (
-                        <Box sx={{ display: 'flex', alignItems: 'center' }}>
-                            <CircularProgress size={20} sx={{ mr: 1 }} />
-                            Validating {progress.completed}/{progress.total} terms...
-                        </Box>
-                    ) : (
-                        'Validate Terms with LOC'
-                    )}
-                </Button>
-            </Box>
-
-            {/* Progress bar during validation */}
-            {isLoading && progress.total > 0 && (
-                <Box sx={{ mt: 2 }}>
-                    <LinearProgress variant="determinate" value={progressPercent} />
-                    <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5 }}>
-                        Validating term {progress.completed} of {progress.total} via LOC API...
-                    </Typography>
-                </Box>
-            )}
-        </Box>
+      <Box sx={{ textAlign: 'center', py: 4 }}>
+        <Typography variant="h6" color="text.secondary">
+          No suggestions yet. Go back and describe the work first.
+        </Typography>
+        <Button variant="contained" onClick={handleBack} sx={{ mt: 2 }}>Back</Button>
+      </Box>
     );
+  }
+
+  return (
+    <Box>
+      <Typography variant="h6" gutterBottom>AI suggestions</Typography>
+      <SuggestionsPanel suggest={run.suggest} />
+      <Box sx={{ mt: 3, display: 'flex', justifyContent: 'space-between' }}>
+        <Button variant="outlined" onClick={handleBack}>Back</Button>
+        <Button variant="contained" onClick={handleLookup}>Look up at the Library of Congress</Button>
+      </Box>
+    </Box>
+  );
 };
 
 export default InitialSuggestions;

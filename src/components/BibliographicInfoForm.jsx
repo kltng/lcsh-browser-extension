@@ -16,13 +16,9 @@ import {
     CardActions
 } from '@mui/material';
 import { useAppContext } from '../context/AppContext';
-import {
-    legacyGenerateSuggestions,
-    parseLcshSuggestions,
-    describeActiveProvider,
-    onSettingsChanged,
-    logWorkflowError
-} from '../services/legacyBridge';
+import { describeActiveProvider } from '../services/pipeline/label';
+import { onSettingsChanged } from '../services/settings';
+import { createPreviewTracker } from './previewUrls';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import DeleteIcon from '@mui/icons-material/Delete';
 import ImageIcon from '@mui/icons-material/Image';
@@ -33,17 +29,22 @@ const BibliographicInfoForm = () => {
         setBibliographicInfo,
         systemPromptRules,
         setActiveStep,
-        setInitialSuggestions,
-        setSuggestionProvenance,
-        setIsLoading,
-        isLoading,
+        workflow,
+        run,
         error,
         setError
     } = useAppContext();
 
+    const isLoading = run.run.stage === 'suggesting';
+
     const [uploadedImages, setUploadedImages] = useState([]);
     const [providerLabel, setProviderLabel] = useState('');
     const fileInputRef = useRef(null);
+    const previewsRef = useRef(null);
+    if (!previewsRef.current) previewsRef.current = createPreviewTracker();
+
+    // Revoke every outstanding preview URL when the form unmounts
+    useEffect(() => () => previewsRef.current.revokeAll(), []);
 
     // Show which provider and model will be used; refresh when settings change
     useEffect(() => {
@@ -89,7 +90,7 @@ const BibliographicInfoForm = () => {
         // Process each image file
         const newImages = imageFiles.map(file => ({
             file,
-            preview: URL.createObjectURL(file),
+            preview: previewsRef.current.create(file),
             name: file.name,
             type: file.type,
             size: file.size
@@ -106,7 +107,7 @@ const BibliographicInfoForm = () => {
         const newImages = [...uploadedImages];
 
         // Revoke the object URL to avoid memory leaks
-        URL.revokeObjectURL(newImages[index].preview);
+        previewsRef.current.revoke(newImages[index].preview);
 
         newImages.splice(index, 1);
         setUploadedImages(newImages);
@@ -159,57 +160,60 @@ const BibliographicInfoForm = () => {
             return;
         }
 
+        // Convert images to base64 if any
+        let imageData = [];
         try {
-            setIsLoading(true);
-
-            // Convert images to base64 if any
-            let imageData = [];
             if (uploadedImages.length > 0) {
                 imageData = await convertImagesToBase64();
             }
-
-            // Add image data to bibliographic info
-            const enhancedBibliographicInfo = {
-                ...bibliographicInfo,
-                images: imageData
-            };
-            setBibliographicInfo({
-                ...bibliographicInfo,
-                images: imageData.map(({ name, type, size }) => ({ name, type, size }))
-            });
-
-            // Generate LCSH suggestions with the active provider
-            const response = await legacyGenerateSuggestions(
-                enhancedBibliographicInfo,
-                systemPromptRules
-            );
-
-            // Parse the response
-            const parsedSuggestions = parseLcshSuggestions(response);
-
-            // Store the suggestions and their provenance in the context
-            setInitialSuggestions(parsedSuggestions);
-            setSuggestionProvenance(response.provenance);
-
-            // Move to the next step
-            setActiveStep(1);
         } catch (err) {
-            setError(err.message || 'Failed to generate LCSH suggestions');
-            logWorkflowError('Error generating LCSH suggestions:', err);
-        } finally {
-            setIsLoading(false);
+            setError('The images could not be read.');
+            return;
         }
+
+        // The context keeps image metadata only; the image data goes to this run
+        setBibliographicInfo({
+            ...bibliographicInfo,
+            images: imageData.map(({ name, type, size }) => ({ name, type, size }))
+        });
+
+        // Step 1 of a NEW run; errors are kept in the run state and shown above the form
+        await workflow.suggest({
+            bibliographicInfo: { ...bibliographicInfo, images: imageData },
+            rules: systemPromptRules
+        });
+        if (workflow.getState().run.stage === 'suggested') setActiveStep(1);
+    };
+
+    // Open the Settings screen
+    const handleOpenSettings = () => {
+        window.location.hash = 'settings';
     };
 
     return (
         <Box component="form" onSubmit={handleSubmit} noValidate>
             <Typography variant="h6" gutterBottom>
-                Enter Bibliographic Information
+                Describe the work
             </Typography>
 
             {error && (
                 <Alert severity="error" sx={{ mb: 2 }}>
                     {error}
+                </Alert>
+            )}
+
+            {run.suggestError && !isLoading && (
+                <Alert
+                    severity="error"
+                    sx={{ mb: 2 }}
+                    action={(
+                        <Box sx={{ display: 'flex', gap: 1 }}>
+                            <Button color="inherit" size="small" type="submit">Retry</Button>
+                            <Button color="inherit" size="small" onClick={handleOpenSettings}>Settings</Button>
+                        </Box>
+                    )}
+                >
+                    {run.suggestError.message}
                 </Alert>
             )}
 
@@ -361,10 +365,10 @@ const BibliographicInfoForm = () => {
                     {isLoading ? (
                         <>
                             <CircularProgress size={24} sx={{ mr: 1 }} />
-                            Generating Suggestions...
+                            Suggesting headings...
                         </>
                     ) : (
-                        'Generate LCSH Suggestions'
+                        'Suggest headings'
                     )}
                 </Button>
             </Box>

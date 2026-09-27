@@ -8,6 +8,7 @@
  */
 import { PROVIDERS } from './providers/registry';
 import { allModelMetaKeys } from './providers/capabilities';
+import { OLD_DEFAULT_RULES } from './pipeline/legacyRules';
 
 export const SETTINGS_VERSION = 2;
 export const DEFAULT_PROVIDER_ID = 'gemini';
@@ -219,7 +220,10 @@ export const saveModelMeta = async (key, value) => {
 };
 
 /**
- * Read the stored rules, writing the default first if none is stored (locked).
+ * Read the stored rules (locked). The default is written first when no rules
+ * are stored, or when the stored rules are EXACTLY an old version's default
+ * (never edited by the user). Every other string, including whitespace-only
+ * edits of an old default, is custom and is kept unchanged.
  * @param {string} defaultRules - Default rules text
  * @returns {Promise<string>}
  */
@@ -227,7 +231,8 @@ export const loadSystemPromptRules = async (defaultRules) => {
   await ready();
   return withLock(async () => {
     const { systemPromptRules } = await storage().get(['systemPromptRules']);
-    if (typeof systemPromptRules === 'string' && systemPromptRules) return systemPromptRules;
+    const isOldDefault = OLD_DEFAULT_RULES.includes(systemPromptRules);
+    if (typeof systemPromptRules === 'string' && systemPromptRules && !isOldDefault) return systemPromptRules;
     await storage().set({ systemPromptRules: defaultRules });
     return defaultRules;
   });

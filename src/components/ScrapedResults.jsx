@@ -1,296 +1,146 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import {
-    Box,
-    Typography,
-    Button,
-    List,
-    ListItem,
-    Chip,
-    Alert,
-    Card,
-    CardContent,
-    Accordion,
-    AccordionSummary,
-    AccordionDetails,
-    Link,
-    Grid,
-    Tooltip
+  Box, Typography, Button, Chip, Alert, Card, CardContent, Link, CircularProgress, Stack
 } from '@mui/material';
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { useAppContext } from '../context/AppContext';
-import SimilarityScore from './SimilarityScore';
-import { findBestMatch, calculateSimilarity } from '../utils/similarityUtils';
+import { selectionsOf } from '../services/pipeline/run';
+import { FALLBACK_BANNER } from '../services/pipeline/select';
+import { outcomeLine, choiceText, authorityLabel, lcLink } from './pipelineText';
+
+/**
+ * One candidate row: label, authority badge, LC link, match class, and the "Use this heading" control.
+ * @param {{candidate:object, chosen:boolean, similarity:number|null, readOnly:boolean, onUse:Function}} props - Candidate and state
+ * @returns {JSX.Element}
+ */
+const CandidateRow = ({ candidate, chosen, similarity, readOnly, onUse }) => (
+  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 0.5, flexWrap: 'wrap', bgcolor: chosen ? 'rgba(25,118,210,0.08)' : 'transparent' }}>
+    <Typography variant="body2" sx={{ fontWeight: chosen ? 'bold' : 'normal' }}>{candidate.label}</Typography>
+    <Chip size="small" label={authorityLabel(candidate.authority)} />
+    <Link href={lcLink(candidate.uri)} target="_blank" rel="noopener noreferrer" variant="caption">
+      LC record {candidate.localId}
+    </Link>
+    <Chip size="small" variant="outlined" label={candidate.matchClass} />
+    {chosen && similarity !== null && (
+      <Typography variant="caption" color="text.secondary">{similarity}% similar spelling</Typography>
+    )}
+    {!readOnly && !chosen && (
+      <Button size="small" onClick={() => onUse(candidate.cid)}>Use this heading</Button>
+    )}
+  </Box>
+);
+
+/**
+ * Step 3 content, per suggestion (also used read-only by history).
+ * @param {{suggestions:object[], results:Object<string,object>, pending?:Object<string,boolean>, selections:object[],
+ *   mode:string|null, manual?:object, readOnly?:boolean, onChoose?:Function, onRetry?:Function}} props - State and callbacks
+ * @returns {JSX.Element}
+ */
+export const MatchesPanel = ({
+  suggestions, results, pending = {}, selections, mode, manual = {}, readOnly = false, onChoose, onRetry
+}) => (
+  <Box>
+    {suggestions.map((s) => {
+      const result = results[s.id];
+      const selection = selections.find((x) => x.suggestionId === s.id);
+      const candidates = result?.candidates || [];
+      return (
+        <Card key={s.id} variant="outlined" sx={{ mb: 2 }}>
+          <CardContent>
+            <Typography variant="subtitle1">
+              {s.heading} <Typography component="span" variant="caption" color="text.secondary">(AI suggestion · {s.kind})</Typography>
+            </Typography>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+              {pending[s.id] && <CircularProgress size={14} />}
+              <Typography variant="body2" color={result?.outcome === 'failed' ? 'error' : 'text.secondary'}>
+                {outcomeLine(result, Boolean(pending[s.id]))}
+              </Typography>
+              {!readOnly && result?.outcome === 'failed' && (
+                <Button size="small" variant="outlined" onClick={() => onRetry(s.id)}>Retry lookup</Button>
+              )}
+            </Box>
+            {candidates.map((c) => (
+              <CandidateRow
+                key={c.cid}
+                candidate={c}
+                chosen={selection?.cid === c.cid}
+                similarity={selection?.cid === c.cid ? selection.lexicalSimilarity : null}
+                readOnly={readOnly}
+                onUse={(cid) => onChoose(s.id, cid)}
+              />
+            ))}
+            {candidates.length > 0 && (
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1 }}>
+                <Typography variant="body2">
+                  <strong>Current choice:</strong> {choiceText(selection, { mode, hasManual: Object.hasOwn(manual, s.id) })}
+                </Typography>
+                {!readOnly && <Button size="small" color="inherit" onClick={() => onChoose(s.id, null)}>Use none</Button>}
+              </Box>
+            )}
+            {selection?.cid && selection.droppedSubdivisions.length > 0 && (
+              <Alert severity="info" sx={{ mt: 1 }}>
+                The selected heading does not include these suggested subdivisions: {selection.droppedSubdivisions.join(', ')}
+              </Alert>
+            )}
+          </CardContent>
+        </Card>
+      );
+    })}
+  </Box>
+);
 
 const ScrapedResults = () => {
-    const {
-        initialSuggestions,
-        scrapedResults,
-        setActiveStep,
-        setFinalRecommendations,
-        error,
-        setError
-    } = useAppContext();
+  const { run, workflow, setActiveStep } = useAppContext();
+  const suggestions = run.suggest?.suggestions || [];
+  const selections = selectionsOf(run);
+  const lookingUp = Object.keys(run.lookup.pending).length > 0;
+  const selecting = run.select.pending;
+  const canBuild = run.run.stage === 'selected' || run.run.stage === 'built';
 
-    const [processedResults, setProcessedResults] = useState({});
-    const [similarityScores, setSimilarityScores] = useState({});
-    const [averageSimilarity, setAverageSimilarity] = useState(0);
+  const handleSettings = () => { window.location.hash = 'settings'; };
+  const handleBuild = () => {
+    workflow.build();
+    setActiveStep(3);
+  };
 
-    // Process results when component mounts
-    useEffect(() => {
-        const processed = {};
-        const scores = {};
-        let totalScore = 0;
-        let validTerms = 0;
-
-        Object.entries(scrapedResults).forEach(([term, result]) => {
-            processed[term] = {
-                success: result?.success || false,
-                error: result?.error || 'No results found',
-                items: result?.items || []
-            };
-
-            if (result?.items && result.items.length > 0) {
-                const bestMatch = findBestMatch(term, result.items);
-                scores[term] = bestMatch.similarity;
-                totalScore += bestMatch.similarity;
-                validTerms++;
-            } else {
-                scores[term] = 0;
-            }
-        });
-
-        const avgScore = validTerms > 0 ? Math.round(totalScore / validTerms) : 0;
-
-        setProcessedResults(processed);
-        setSimilarityScores(scores);
-        setAverageSimilarity(avgScore);
-    }, [scrapedResults]);
-
-    const handleBack = () => {
-        setActiveStep(1);
-    };
-
-    const handleContinue = () => {
-        try {
-            const finalRecommendations = initialSuggestions.recommendedTerms.map(term => {
-                const scrapedResult = processedResults[term.term] || { items: [] };
-                const similarity = similarityScores[term.term] || 0;
-
-                let bestMatch = null;
-                if (scrapedResult.items && scrapedResult.items.length > 0) {
-                    const { item } = findBestMatch(term.term, scrapedResult.items);
-                    bestMatch = item;
-                }
-
-                return {
-                    ...term,
-                    scrapedItems: scrapedResult.items || [],
-                    verified: scrapedResult.items && scrapedResult.items.length > 0,
-                    similarity,
-                    bestMatch
-                };
-            });
-
-            setFinalRecommendations(finalRecommendations);
-            setActiveStep(3);
-        } catch (err) {
-            setError(err.message || 'Failed to process final recommendations');
-        }
-    };
-
-    if (!scrapedResults || Object.keys(scrapedResults).length === 0) {
-        return (
-            <Box sx={{ textAlign: 'center', py: 4 }}>
-                <Typography variant="h6" color="text.secondary">
-                    No validation results available. Please go back and validate terms first.
-                </Typography>
-                <Button
-                    variant="contained"
-                    color="primary"
-                    onClick={handleBack}
-                    sx={{ mt: 2 }}
-                >
-                    Back to Initial Suggestions
-                </Button>
-            </Box>
-        );
-    }
-
-    return (
-        <Box>
-            <Typography variant="h6" gutterBottom>
-                LOC Validation Results
-            </Typography>
-
-            {error && (
-                <Alert severity="error" sx={{ mb: 2 }}>
-                    {error}
-                </Alert>
-            )}
-
-            {/* Overall similarity score */}
-            <Card variant="outlined" sx={{ mb: 3 }}>
-                <CardContent>
-                    <Typography variant="subtitle1" gutterBottom>
-                        Overall Validation Score
-                    </Typography>
-                    <Box sx={{ maxWidth: 400, mx: 'auto', my: 2 }}>
-                        <SimilarityScore
-                            score={averageSimilarity}
-                            label="Average similarity between suggested terms and LOC results"
-                            showTooltip={false}
-                        />
-                    </Box>
-                    <Typography variant="body2" color="text.secondary" align="center">
-                        This score indicates how well the suggested terms match the actual Library of Congress Subject Headings.
-                    </Typography>
-                </CardContent>
-            </Card>
-
-            {Object.entries(processedResults).map(([term, result], index) => (
-                <Accordion key={index} defaultExpanded={index === 0}>
-                    <AccordionSummary
-                        expandIcon={<ExpandMoreIcon />}
-                        aria-controls={`panel${index}-content`}
-                        id={`panel${index}-header`}
-                    >
-                        <Box sx={{ display: 'flex', alignItems: 'center', width: '100%' }}>
-                            <Typography sx={{ flexGrow: 1 }}>{term}</Typography>
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 220 }}>
-                                {result && result.items && result.items.length > 0 ? (
-                                    <>
-                                        <Chip
-                                            label={`${result.items.length} results`}
-                                            color="success"
-                                            size="small"
-                                        />
-                                        <Tooltip title={`Similarity score: ${similarityScores[term]}%`}>
-                                            <Chip
-                                                label={`${similarityScores[term]}% match`}
-                                                color={similarityScores[term] >= 70 ? "success" : similarityScores[term] >= 50 ? "warning" : "error"}
-                                                size="small"
-                                            />
-                                        </Tooltip>
-                                    </>
-                                ) : (
-                                    <Chip
-                                        label="No results"
-                                        color="error"
-                                        size="small"
-                                    />
-                                )}
-                            </Box>
-                        </Box>
-                    </AccordionSummary>
-                    <AccordionDetails>
-                        {result && result.items && result.items.length > 0 ? (
-                            <>
-                                <Box sx={{ mb: 3 }}>
-                                    <Typography variant="subtitle2" gutterBottom>
-                                        Similarity Score
-                                    </Typography>
-                                    <Box sx={{ maxWidth: 300 }}>
-                                        <SimilarityScore score={similarityScores[term]} />
-                                    </Box>
-                                </Box>
-
-                                <Typography variant="subtitle2" gutterBottom>
-                                    LOC Results
-                                </Typography>
-                                <List>
-                                    {result.items.map((item, itemIndex) => {
-                                        const itemSimilarity = calculateSimilarity(term, item.heading);
-                                        const sourceBadge = item.source === 'lcnaf' ? 'LCNAF' : 'LCSH';
-
-                                        return (
-                                            <ListItem key={itemIndex} divider>
-                                                <Grid container spacing={2}>
-                                                    <Grid item xs={12} sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                                                        <Box>
-                                                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                                                                <Typography variant="subtitle1">
-                                                                    {item.heading}
-                                                                </Typography>
-                                                                <Chip
-                                                                    label={sourceBadge}
-                                                                    size="small"
-                                                                    variant="outlined"
-                                                                    color={item.source === 'lcnaf' ? 'secondary' : 'primary'}
-                                                                />
-                                                            </Box>
-                                                            {item.uri && (
-                                                                <Link
-                                                                    href={item.uri.startsWith('http') ? item.uri : `https://id.loc.gov${item.uri}`}
-                                                                    target="_blank"
-                                                                    rel="noopener noreferrer"
-                                                                >
-                                                                    View on LOC
-                                                                </Link>
-                                                            )}
-                                                        </Box>
-                                                        <Tooltip title={`Similarity to "${term}"`}>
-                                                            <Chip
-                                                                label={`${itemSimilarity}% match`}
-                                                                color={itemSimilarity >= 70 ? "success" : itemSimilarity >= 50 ? "warning" : "error"}
-                                                                size="small"
-                                                            />
-                                                        </Tooltip>
-                                                    </Grid>
-
-                                                    {item.datasetType && (
-                                                        <Grid item xs={12} sm={6}>
-                                                            <Typography variant="caption" color="text.secondary">
-                                                                Dataset: {item.datasetType}
-                                                            </Typography>
-                                                        </Grid>
-                                                    )}
-
-                                                    {item.identifier && (
-                                                        <Grid item xs={12} sm={6}>
-                                                            <Typography variant="caption" color="text.secondary">
-                                                                ID: {item.identifier}
-                                                            </Typography>
-                                                        </Grid>
-                                                    )}
-                                                </Grid>
-                                            </ListItem>
-                                        );
-                                    })}
-                                </List>
-                            </>
-                        ) : (
-                            <Typography color="text.secondary">
-                                No results found for this term in the Library of Congress.
-                                {result.error && result.error !== 'No results found' && (
-                                    <Box component="span" sx={{ display: 'block', mt: 1 }}>
-                                        Error: {result.error}
-                                    </Box>
-                                )}
-                            </Typography>
-                        )}
-                    </AccordionDetails>
-                </Accordion>
-            ))}
-
-            <Box sx={{ mt: 3, display: 'flex', justifyContent: 'space-between' }}>
-                <Button
-                    variant="outlined"
-                    color="primary"
-                    onClick={handleBack}
-                >
-                    Back
-                </Button>
-
-                <Button
-                    variant="contained"
-                    color="primary"
-                    onClick={handleContinue}
-                >
-                    Continue to Final Recommendations
-                </Button>
-            </Box>
+  return (
+    <Box>
+      <Typography variant="h6" gutterBottom>Matches</Typography>
+      {run.select.mode === 'exact-fallback' && <Alert severity="warning" sx={{ mb: 2 }}>{FALLBACK_BANNER}</Alert>}
+      {run.select.error && (
+        <Alert severity="error" sx={{ mb: 2 }}>
+          {run.select.error.message}
+          <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
+            <Button size="small" variant="outlined" onClick={() => workflow.select()}>Retry</Button>
+            <Button size="small" variant="outlined" onClick={handleSettings}>Settings</Button>
+            <Button size="small" variant="outlined" onClick={() => workflow.continueWithoutAi()}>
+              Continue without AI (exact matches only)
+            </Button>
+          </Stack>
+        </Alert>
+      )}
+      <MatchesPanel
+        suggestions={suggestions}
+        results={run.lookup.results}
+        pending={run.lookup.pending}
+        selections={selections}
+        mode={run.select.mode}
+        manual={run.select.manual}
+        onChoose={workflow.choose}
+        onRetry={workflow.retryLookup}
+      />
+      <Box sx={{ mt: 3, display: 'flex', justifyContent: 'space-between', gap: 2 }}>
+        <Button variant="outlined" onClick={() => setActiveStep(1)}>Back</Button>
+        <Box sx={{ display: 'flex', gap: 2 }}>
+          <Button variant="outlined" onClick={() => workflow.select()} disabled={lookingUp || selecting}>
+            {selecting ? <><CircularProgress size={18} sx={{ mr: 1 }} />Choosing…</> : 'Choose headings'}
+          </Button>
+          <Button variant="contained" onClick={handleBuild} disabled={!canBuild || lookingUp || selecting}>
+            Build recommendations
+          </Button>
         </Box>
-    );
+      </Box>
+    </Box>
+  );
 };
 
 export default ScrapedResults;
