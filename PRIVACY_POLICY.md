@@ -1,132 +1,120 @@
-# Privacy Policy - LCSH Recommendation Tool
+# Privacy Policy — LCSH Recommendation Tool
 
-Last Updated: January 9, 2026
+Last updated: 27 September 2026
 
-## Introduction
+## In short
 
-The LCSH Recommendation Tool is a Chrome extension designed to assist librarians and catalogers in generating Library of Congress Subject Headings (LCSH) for bibliographic materials. This privacy policy explains how we handle, store, and protect your data.
+- Everything you type stays on your computer, except what is sent to the AI
+  provider **you choose** and to the Library of Congress to look up headings.
+- Your API keys are kept on your computer and are sent only to the provider
+  they belong to.
+- The extension has no server. It collects no analytics and no telemetry.
+- If you choose the on-device model (Gemini Nano), your text is not sent
+  anywhere at all for the suggestion step.
 
-## Data We Collect
+## What you give the extension
 
-### Bibliographic Information
-When you use this extension, you may provide the following bibliographic information:
-- Title of the work
-- Author name
-- Abstract or summary
-- Table of contents
-- Additional notes
+You may enter a title, an author, an abstract, a table of contents and notes,
+and you may upload images such as a book cover or title page. You may also
+edit the cataloguing rules the extension sends with your text.
 
-### Images
-You may upload images of:
-- Book covers
-- Title pages
-- Other bibliographic materials
+## Where that information goes
 
-### API Key
-You must provide your personal Gemini API key to use this extension's AI features.
+### 1. The AI provider you choose
 
-### Conversation History
-The extension saves your conversation history locally, including:
-- Bibliographic information provided
-- Generated LCSH recommendations
-- Similarity scores
-- MARC records
+The extension supports these providers. It contacts **only** the one you
+select, using the key you enter for it:
 
-## How We Use Your Data
+| Provider | Where the request goes |
+|---|---|
+| OpenAI | `api.openai.com` |
+| Google Gemini | `generativelanguage.googleapis.com` |
+| Anthropic Claude | `api.anthropic.com` |
+| DeepSeek | `api.deepseek.com` |
+| Qwen (Alibaba) | `dashscope-intl.aliyuncs.com` or `dashscope.aliyuncs.com` |
+| Zhipu GLM | `api.z.ai` or `open.bigmodel.cn` |
+| Moonshot Kimi | `api.moonshot.ai` or `api.moonshot.cn` |
+| MiniMax | `api.minimax.io` or `api.minimax.cn` |
+| OpenRouter | `openrouter.ai` |
+| LM Studio | an address you enter, normally your own computer |
+| Custom endpoint | an address you enter |
+| **Gemini Nano** | **nowhere — it runs inside Chrome on your device** |
 
-### AI Processing
-Your bibliographic information and uploaded images are sent to the Google Gemini API to generate subject heading suggestions. We use the Gemini 2.5 Flash model for this purpose.
+For the Chinese providers you choose the international or the China region
+yourself; the extension never switches regions on its own.
 
-### Data Validation
-The extension queries the Library of Congress website (id.loc.gov) to validate and verify suggested subject headings against official LCSH records.
+What is sent: your bibliographic text, your uploaded images, and your
+cataloguing rules. What is never sent: your API keys for any *other*
+provider, your history, or anything about your browser.
 
-### Local Processing
-All similarity score calculations, MARC record generation, and recommendation filtering are performed locally within the extension.
+Each provider handles your data under its own privacy policy and its own
+data-retention rules. Please read the policy of the provider you use.
 
-## Data Storage
+### 2. The Library of Congress
 
-### Chrome Local Storage
-All data is stored locally on your device using Chrome's local storage:
-- Your Gemini API key
-- System prompt rules
-- Conversation history
+To check that a suggested heading really exists, the extension searches
+`id.loc.gov`. Only the heading text is sent — for example
+`Motion pictures--Japan--History`. Your abstract, notes and images are never
+sent to the Library of Congress.
 
-### Image Handling
-**Important:** Full image data is NOT saved in conversation history to protect your privacy and save storage space. Only image metadata (name, type, size) is preserved.
+If you install the offline database (below) and choose the profile that does
+not include names, name headings are still looked up at `id.loc.gov`. With
+the full offline database, a chosen name's MARC field is fetched from
+`id.loc.gov` as well.
 
-### No Server Storage
-We do not store any of your data on our servers. All processing occurs either locally on your device or through third-party APIs that you authorize.
+### 3. Hugging Face (only if you install the offline database)
 
-## Third-Party Services
+The offline database is optional. If you install it, the extension downloads
+files from `huggingface.co` and its content delivery network. The download
+does **not** include anything you typed: it is a plain file download.
+Hugging Face and its network receive the ordinary technical details of any
+download, such as your IP address.
 
-### Google Gemini API
-- **Purpose:** Generate LCSH suggestions using AI
-- **Data Sent:** Bibliographic information and images you provide
-- **Privacy Policy:** [Google AI Privacy Policy](https://policies.google.com/privacy)
-- **Your API Key:** Your personal API key is stored locally and used directly to authenticate with Google. We do not have access to your API key or your Google account.
+## What is stored, and where
 
-### Library of Congress
-- **Purpose:** Validate and verify LCSH terms
-- **Data Sent:** Suggested subject headings (not your original bibliographic information)
-- **Privacy Policy:** [Library of Congress Privacy Policy](https://www.loc.gov/legal/privacy-policy/)
-- **Note:** The Library of Congress website may collect standard web analytics data when the extension makes requests.
+Everything is stored by Chrome on your computer:
 
-### Hugging Face (local database downloads)
-- **Purpose:** Download the optional local LCSH database.
-- **Data Sent:** Database downloads do not include entered bibliographic text or
-  headings. Hugging Face and its CDN receive ordinary connection metadata. With
-  the core database, name searches use the Library of Congress online; with the
-  full database, resolving chosen names' MARC keys also uses the Library of
-  Congress online.
-- **Privacy Policy:** [Hugging Face Privacy Policy](https://huggingface.co/privacy)
+- **API keys** — in the extension's local storage. They are sent only to the
+  matching provider, always in a request header, never in a web address.
+  They never appear in your history, in exported files or in error messages.
+- **Your settings** — the provider and model you chose, your cataloguing
+  rules, and which lookup source you use.
+- **History** — the records you save, including the headings, their Library
+  of Congress identifiers and the MARC fields. An uploaded picture itself is
+  never saved; only its file name, type and size are kept. History holds at
+  most 25 records, and at most 256 KiB per record.
+- **The offline database**, if you install it. It contains only public
+  Library of Congress data.
 
-## Data Sharing
+Nothing is uploaded to us, because there is no "us" to upload to: the
+extension has no server component.
 
-We do not sell, rent, or share your data with any third parties for marketing or advertising purposes. Your data is only shared with:
+## Permissions the extension asks for
 
-1. **Google Gemini API** - For generating suggestions (requires your API key)
-2. **Library of Congress** - For validating subject headings (public website queries)
+- **Storage** and **unlimited storage** — to keep the settings, history and
+  the optional database on your computer.
+- **Access to `id.loc.gov`** — to look up headings.
+- **Access to a provider's address** — requested only when you choose that
+  provider, and only for that one. If you decline, the extension keeps
+  working with the providers you already allowed.
 
-## Data Retention
+## Your choices
 
-Your data remains stored on your device until you:
-- Clear your conversation history using the extension's built-in feature
-- Uninstall the Chrome extension
-- Clear Chrome browser data
+- Change or delete your API key at any time in Settings.
+- Delete one history record, or clear the whole history, in the History tab.
+- Remove the offline database in Settings.
+- Uninstall the extension: Chrome deletes everything listed above.
 
-## Your Rights
+## Children
 
-You have the right to:
-- **Access:** View your stored conversation history anytime
-- **Delete:** Remove individual conversations or clear all history
-- **Export:** Export recommendations to CSV format
-- **Revoke:** Remove your API key or uninstall the extension at any time
+The extension is a professional cataloguing tool and is not directed at
+children.
 
-## Security Measures
+## Changes
 
-- **API Key Storage:** Your Gemini API key is stored securely in Chrome's local storage
-- **No Data Transmission:** We do not transmit your data to any servers other than the authorized third-party APIs
-- **Image Privacy:** Full image data is not saved, only metadata
-- **Local Processing:** Sensitive operations occur locally on your device
+If this policy changes, the date at the top changes with it. The current
+version is always in the extension's repository.
 
-## Children's Privacy
+## Contact
 
-This extension is not intended for children under 13. We do not knowingly collect personal information from children under 13.
-
-## Changes to This Privacy Policy
-
-We may update this privacy policy from time to time. We will notify you of any material changes by updating the date at the top of this policy.
-
-## Contact Us
-
-If you have questions about this privacy policy or our data practices, please contact us through the extension's GitHub repository:
-
-**Repository:** [LCSH Recommendation Tool on GitHub](https://github.com/yourusername/lcsh-recommendation-tool)
-
-## Third-Party Links
-
-This extension may contain links to external websites (e.g., id.loc.gov for LCSH records). We are not responsible for the privacy practices of these external sites. We encourage you to read the privacy policies of any third-party websites you visit.
-
----
-
-**Summary:** Your data is stored locally on your device and only shared with Google's Gemini API (using your personal API key) and the Library of Congress website for validation purposes. We do not store your data on our servers or share it for marketing purposes.
+Please open an issue in the extension's GitHub repository.
