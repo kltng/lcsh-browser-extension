@@ -28,3 +28,32 @@ Consequences:
 - Records whose key tag is 18X are subdivision records → never candidates.
 - Local DB (P5): the builder must supply the same key per record. The SKOS bulk
   files do not contain it; the builder needs MADS/RDF or MARC XML input for it.
+
+## Addendum (lead live probes after review round 1, 2026-09-27)
+
+| aLabel | token | marcKeys[0] | rdftypes | collections (selected) |
+|---|---|---|---|---|
+| Bible. English | n81105670 | `130 0$aBible.$lEnglish` | Title | NamesAuthorizedHeadings |
+| Bible--Criticism, interpretation, etc. | sh85013617 | `130 0$aBible$xCriticism, interpretation, etc.` | ComplexSubject | LCSH_General |
+| Vatican Council (2nd : 1962-1965 : Basilica di San Pietro in Vaticano) | n79084169 | `1112 $aVatican Council$n(2nd :$d1962-1965 :$cBasilica di San Pietro in Vaticano)` | ConferenceName | NamesAuthorizedHeadings |
+| Shakespeare, William, 1564-1616. Hamlet | n80008522 | `1001 $aShakespeare, William,$d1564-1616.$tHamlet` | NameTitle | NamesAuthorizedHeadings |
+| Kesha, 1987- | no2010012014 | `1000 $aKesha,$d1987-` | — | — |
+| History | sh85061212 | `150  $aHistory` | Topic | LCSH_General |
+| History | sh99005024 | `180  $xHistory` | Topic | Subdivisions, TopicSubdivisions |
+| History--16th century | sh2002006122 | `180  $xHistory$y16th century` | ComplexSubject | Subdivisions |
+| Dollar, American (Coin) | sh85038864 | `150 0$aDollar, American (Coin)` | Topic | LCSH_General |
+
+Corrections to the conclusions above:
+- 130 → 630: the authority's nonfiling count is its SECOND indicator; bib 630 takes it
+  as its FIRST indicator (`130 0…` → `630 00`). The earlier "1st indicator blank
+  except 100/110/111" rule was wrong for 630.
+- Authority indicators of 150/151/155 vary (`150 0` vs `150  `) and are ignored.
+- Subdivision records include 180 AND 181 (and any 18X); they also carry the
+  `collection_Subdivisions` collection.
+- Deprecated headings: searching "Aliens" returned the current "Noncitizens" and
+  no deprecated record (observed; not a documented guarantee).
+- No authorized heading with a literal `$` was found (probed "$64,000 question",
+  "$100,000 pyramid", "Ke$ha"); parsing must still defend against it.
+- Consistency check that holds for every sample: joining the parsed subfield values
+  (`$a` first; `$x $y $z $v` joined with `--`; other codes joined with a space)
+  reproduces `aLabel` exactly. A key that does not reproduce its label is unusable.
