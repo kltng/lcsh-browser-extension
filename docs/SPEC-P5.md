@@ -1,6 +1,6 @@
 # SPEC-P5 — Local LCSH database in the extension
 
-Status: v2.5, 2026-10-01 (round 2 §17; round 3 §18; live findings §19; reviewer edits to them §20). v1 was REJECTED (14 findings, 4 HIGH;
+Status: v2.6, 2026-10-01 (round 2 §17; round 3 §18; live findings §19; reviewer edits to them §20; fault-injection test build §21). v1 was REJECTED (14 findings, 4 HIGH;
 `.dispatch/spec-review-p5-1/last_message.md`; v1 archived at
 `.dispatch/SPEC-P5.v1.md`). §16 maps each finding to its fix. Builds on
 SPEC-P4 (lookup step, Candidate, honesty rule) and the builder contract
@@ -706,7 +706,7 @@ tiny fixtures test correctness only.
    key online; offline → "MARC not available offline"; §11 timings; memory
    stays bounded during install.
 4. Full → full repair; core ↔ full switch; uninstall.
-5. Injected faults (a test build flag): failure just before / just after the
+5. Injected faults (the §21 fault build): failure just before / just after the
    commit write, after the switch, at each deletion; settings-write failure;
    quota error; cancel during import and during the stored-byte check;
    repeated Install clicks; uninstall during install.
@@ -809,3 +809,71 @@ Confirmation of the guard (review 5): APPROVE-WITH-CHANGES, no HIGH. Folded
 into v2.5: guard installed and verified before acquisition, `clearOnInit:
 false`, retries in a fresh worker (the fail-fast `Promise.all` can leave a
 late handle), and the matching §12 test.
+
+## 21. Fault-injection test build (v2.6)
+
+§13 row 5 needs faults that the UI cannot cause. v2.5 named "a test build
+flag" but never defined it; this section does. It adds NO behaviour to the
+shipped extension: every hook is compiled out of the production package.
+(Review of the first draft: `.dispatch/spec-review-p5-6/last_message.md`;
+its replacement texts are folded in below verbatim.)
+
+**Build.** Define `__LCSH_FAULTS__` with webpack `DefinePlugin` as the boolean literal `false` in `webpack.prod.js` and `webpack.dev.js`, and as the boolean literal `true` only in `webpack.faults.js`. Each effective configuration must contain exactly one definition, with no conflicting definitions introduced by configuration merging. The fault configuration uses production mode, the production minimizer and the existing manifest/CSP, and writes only to `dist-faults/` (gitignored). The lead runs it directly; no npm script is required.
+
+All fault-only parsing, state, messages, handlers, logging, dependency loading and hook execution must be inside compile-time `if (__LCSH_FAULTS__)` branches. Fault helper imports must not introduce unguarded initialization or side effects. The false build must preserve the existing production control flow.
+
+Acceptance: inspect the effective production configuration for the literal false definition and enabled production minimization. Inspect all emitted production JavaScript, including worker and asynchronous chunks, for absence of fault parsing, dispatch, messages and hook execution. Search the complete package for distinctive fault markers and point names, and inspect any matches; searching only for `faults=` or a generic word such as `delete` is insufficient. Fault helper assets and source maps containing fault code must not ship. The lead also verifies that opening the production app with a fault query causes no fault behavior.
+
+Vitest defines the constant as true for hook tests. Separate configuration checks verify the false production/development definitions and isolated fault output path. Tests with an empty plan do not substitute for production artifact inspection.
+
+**Plan.** Only in the fault build, the app reads its own URL query once at document load: `app.html?faults=<point>[@<occurrence>]:<mode>[,...]`. The optional positive occurrence number is supported only for `delete` and defaults to 1. It selects the numbered eligible unlink attempt across this document’s worker generations. Duplicate entries for a point, unknown points, unsupported modes and invalid occurrence numbers are ignored with a warning.
+
+Preserve the existing static `new Worker(new URL('./services/localdb/worker.js', import.meta.url), { type: 'module' })` expression. Pass fault configuration in a fault-only field of the existing first `acquire` RPC, before recovery. Do not change the worker URL, manifest, permissions or CSP.
+
+The page owns the in-memory occurrence counters and consumed-point set. Worker hooks claim their selected occurrence through fault-only messages; the page validates the source worker and generation, records consumption, and acknowledges before the worker injects the fault. Replacement workers cannot rearm consumed points. Page-side hooks use the same document-owned state. No fault state is persisted or accepted through storage, settings, external messages or web-page messaging.
+
+Each selected point fires at most once per document. Log `[fault] <point>:<mode>` when it fires, with the operation, worker generation and, for deletion, file name and occurrence number. Reloading creates a new plan; remove the query when reopening for a fault-free cleanup check.
+
+**Modes.**
+- `throw`: inject an ordinary `Error('[fault] <point>')` at the specified boundary, except that `import-write` uses a `DOMException` named `QuotaExceededError`. Preserve the existing catches and error mapping.
+- `crash`: after the page has acknowledged consumption, call `self.close()` and suspend the invoking async operation forever with a never-settling promise. Do not throw, return normally, or execute subsequent installer cleanup, catch/finally completion, state reporting or RPC replies. This simulates silent worker loss at a JavaScript boundary, not an abrupt browser/process kill or interruption inside a synchronous write. The existing §3.2 watchdog must detect the loss and perform replacement; the hook must not invoke replacement directly.
+
+Supported modes: `import-write`, `commit-before`, `commit-lost` and `delete` support `throw` and `crash`; `after-switch` supports only `crash`; `settings-write` supports only `throw`.
+
+**Points.**
+
+| Point | Exact injection boundary | Purpose |
+|---|---|---|
+| `import-write` | Wrap the existing coalesced pull callback passed to the real `pool.importDb`. Fire on a subsequent callback invocation after at least 64 MiB of preceding chunks have been handed to and processed by the importer, before returning another chunk. Count those preceding chunks, not compressed progress or transform/hash read-ahead. `throw` raises `DOMException('[fault] import-write', 'QuotaExceededError')` inside the existing import error boundary. | Mid-import storage failure and partial-import cleanup; this does not prove actual disk exhaustion or short-write detection. |
+| `commit-before` | Inside `commitPoint`’s existing try block, immediately before invoking `bridge.commit`, after entering `committing` and gating queries. | Failure before the install or uninstall commit request. |
+| `commit-lost` | Inside the same try block, immediately after `await bridge.commit(...)` returns a real successful answer, but before `commitPoint` interprets it. Fire only when `answer.ok === true`. `throw` hides that successful answer from the decision logic by throwing into the existing catch, which must perform its normal locked reread. Do not inject this error in the page bridge or convert it into an `ok:false` answer. | Successful settings write followed by loss of usable confirmation. This exercises reconciliation, not the bridge timeout itself. |
+| `after-switch` | In `install`, after assigning the new active handle/record, clearing the staging locals, completing the old-handle close attempt and ungating, but before `retire(oldFile, ...)`. Crash only. | Loss after §4.5 step 8, before deletion. |
+| `delete` | In the central installer `unlink`, after name/retained-handle checks, inside its existing try block immediately before `pool.unlink(name)`. Select an eligible attempt with `@<occurrence>` and log its file and operation. | Deletion failure during retirement, terminal staging cleanup, uninstall or startup recovery. |
+| `settings-write` | In `commitLocalDb`, synchronously inside the existing storage-write try block after the final fence and before `storage().set(writes)`. Throw instead of issuing that write. Scope this point to patches containing `localDb`, including uninstall’s null record, so cleanup-only commits cannot consume it. Do not insert an await between the fence and a real write. | Definitively failed install/uninstall settings write through the existing `write-failed` result. |
+
+**Expected outcomes.** Run each fault independently unless a combined-fault scenario explicitly states its expected result. Begin with readable, valid settings and either no installation or a valid recorded installation. Automatic replacement expectations assume the document’s one replacement allowance has not already been consumed. Do not require success after unrelated acquisition, storage or settings failures.
+
+- `import-write:throw`: the real importer failure reaches the existing `InstallError('storage')` mapping. No installation commit occurs. The old installation, if any, remains unchanged; otherwise none becomes installed. Apply §4.8 cleanup. Verify the worker-side error kind separately from the existing page error presentation; this amendment does not change error messages or client error mapping.
+- `commit-before:throw` and `settings-write:throw`: with a successful reconciliation read where needed, the mutation resolves as not committed. An install preserves the previous record and applies §4.8 staging cleanup. A failed uninstall preserves the record and follows §4.7’s reopen/ungate path.
+- `commit-lost:throw`: a successful reread showing the intended record resolves the mutation as committed. Install continues through switch and retirement; uninstall continues with `localDb: null`, online lookup and retirement. An unreadable or unexpected reread instead follows the existing unresolved-commit path: retain files, serve no local queries and report `recovery-unavailable`.
+- Worker crash: the pending operation fails through the existing client path. Replacement, when available, drains admitted settings handlers before acquisition and §3.4 recovery. Recovery uses the settings record, never promotes an orphan, and attempts deletion of non-active files. No record means no installed database. Missing/invalid recorded data, unreadable settings and acquisition failure retain their existing specified outcomes.
+- `delete:throw`: deletion failure does not roll back a committed install or uninstall. Retirement leaves the file pending under the already-written record. Terminal staging cleanup records a failed deletion only on a best-effort basis; an unlisted leftover is still eligible for §3.4 cleanup. Recovery does not guarantee creation of a new pending-list entry for every discovered orphan. Preserve existing cleanup reporting.
+- `delete:crash`: after replacement, the consumed fault does not fire again. Recovery may delete the file immediately, so a persistent pending entry or “Cleanup pending” message is not required.
+- Cleanup succeeds when the relevant close, deletion and settings operations succeed. Otherwise preserve the files and pending information required by §3–§4 and retry on a later fault-free startup; unconditional deletion on the next start is not guaranteed.
+- Throughout these scenarios, settings remain authoritative. They identify the installed file or explicitly record no installation. Uncommitted staging files may exist without pending-list entries. Hooks must never commit an unverified file, delete the recorded active file during recovery, or apply pre-commit staging cleanup to a successfully committed file.
+
+**Tests and live coverage.** Test every supported point/mode pair at its actual call site, including one-shot consumption across worker replacement and inert behavior for an empty plan. Unsupported combinations must not execute. Assert ordering and protocol outcomes, not merely that a helper was called.
+
+For both `commit-lost` modes, prove that the real bridge write succeeds before injection and that the committed file is not sent through terminal staging cleanup. For `commit-lost:throw`, prove that `commitPoint` performs its normal locked reread and follows the reconciliation result. For `commit-lost:crash`, prove that the crashed operation performs no reconciliation read or further completion; replacement recovery reads the authoritative settings and follows §3.4.
+
+For `after-switch:crash`, prove the active handle has changed before the crash and retirement has not begun. For `settings-write:throw`, prove that the targeted install/uninstall storage write is not issued and the existing bridge returns `write-failed`; subsequent cleanup-only settings writes remain governed by the existing protocol.
+
+For both `import-write` modes, prove that the real importer has processed at least 64 MiB of preceding chunks before injection. For `import-write:throw`, prove that the importer’s existing failure cleanup runs, the error reaches `InstallError('storage')`, and the installer applies §4.8. For `import-write:crash`, prove that the suspended importer and invoking install perform no subsequent catch/finally cleanup or completion; replacement handles recovery through the existing acquisition and §3.4 paths.
+
+For every crash hook, prove that the invoking operation sends no completion reply and performs no subsequent cleanup before replacement. The existing watchdog must trigger replacement; the hook must not invoke it directly.
+
+The lead exercises deletion separately during old-file retirement, failed/cancelled staging cleanup, uninstall and startup recovery, including later recovery-loop occurrences selected with `delete@N`. Each run records the targeted file and operation.
+
+Complete the remaining §13 row 5 interactions through existing controls and APIs: cancel during import; cancel during stored-byte verification; repeated Install attempts; and uninstall attempts during an install. Verify UI prevention and the existing client/worker mutation refusal separately. Do not add artificial delays, enable disabled controls, alter cancellation boundaries or change mutation arbitration to make these checks possible.
+
+Row 5 uses the isolated fault package. Other §13 rows retain their production-package requirement. Fault-build results do not substitute for production acceptance.

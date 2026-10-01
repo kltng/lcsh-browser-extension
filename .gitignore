@@ -20,3 +20,4 @@ refs/
 # throwaway Chrome profile for live tests
 .dev-profile/
 .dev-profile-*/
+dist-faults/
