@@ -119,6 +119,9 @@ At the project end: sweep for unfiled skill field reports.
   reviewer model at all, and had lost `--ignore-user-config`. Owner approved
   the upgrade: `brew unlink codex && npm i -g @openai/codex@latest` →
   0.157.1 (roll back with `npm rm -g @openai/codex && brew link codex`).
+- 2026-10-01: codex updated itself to 0.159.3 between dispatches. Isolation
+  re-checked on the first review with it: 0 `rmcp::transport|MCP client`
+  lines. Keep grepping every review log; a silent update can drop a flag.
 - **Credential blast radius, re-verified:** the user's `~/.codex/config.toml`
   defines 9 MCP servers, several with `http_headers`/`env` secrets plus a
   `node_repl`. Without isolation a dispatched review DOES start them (seen in
