@@ -15,7 +15,10 @@ export const FALLBACK_NOTICES = {
   'other-tab': 'The local database is open in another tab of this extension; using the Library of Congress online.',
   'repair-needed': 'The local database is damaged or missing; using the Library of Congress online.',
   'recovery-unavailable': 'Local database settings could not be read; using the Library of Congress online.',
-  'worker-failed': 'The local database could not be started in this tab; using the Library of Congress online.'
+  'worker-failed': 'The local database could not be started in this tab; using the Library of Congress online.',
+  // §3.2 rule 2: the pool stayed held by a previous worker for the whole
+  // acquisition window. Files and settings are untouched.
+  db_busy: 'The local database is still busy; using the Library of Congress online. Reload the page to try again.'
 };
 
 /**

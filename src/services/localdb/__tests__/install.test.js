@@ -47,7 +47,7 @@ const setup = ({
     now: () => 1790000000000,
     onProgress: (e) => events.push({ ...e, type: 'progress' }),
     onPhase: (e) => events.push({ ...e, type: 'phase' }),
-    yieldToLoop: () => Promise.resolve()
+    yieldToMacrotask: () => new Promise((resolve) => { setTimeout(resolve, 0); })
   });
   return { installer, pool, bridge, pointer, bytes, events, phases: () => events.filter((e) => e.type === 'phase').map((e) => e.phase) };
 };
@@ -364,12 +364,19 @@ describe('[P5 row7] one mutation at a time, and cancel', () => {
 
   it('cancel during the stored-byte check stops it before any commit', async () => {
     const env = setup();
+    // Every clock read "costs" 200 ms, so every budget check yields a macrotask.
+    let clock = 0;
     const installer = createInstaller({
       pool: env.pool,
       bridge: env.bridge,
       fetchImpl: async () => ({ status: 200, body: bodyStream(env.pointer.gz) }),
       random: () => 'aaaaaaaa',
-      yieldToLoop: async () => { installer.cancel('op1'); }
+      monotonicNow: () => { clock += 200; return clock; },
+      verifyBatchBytes: 4096,
+      // The worker serves `cancel` in the yield; cancel only once verifying.
+      yieldToMacrotask: async () => {
+        if (installer.operation()?.phase === 'verifying') installer.cancel('op1');
+      }
     });
     await expect(installer.install({ pointer: env.pointer, profile: PROFILE, operationId: 'op1' }))
       .rejects.toMatchObject({ kind: 'cancelled' });
@@ -512,21 +519,41 @@ describe('[P5 row7] update, profile switch and the commit point', () => {
     expect([...env.pool.files.keys()]).toEqual([result.record.file]);
   });
 
-  it('a status ping is answered between the batches of the stored-byte check', async () => {
-    const env = setup({ bytes: dbBytes(4096 * 3) });
+  it('the shared budget yields a macrotask in BOTH the import and the stored-byte check', async () => {
+    const env = setup({ bytes: dbBytes(4096 * 8) });
     const seen = [];
+    let clock = 0;
     const installer = createInstaller({
       pool: env.pool,
       bridge: env.bridge,
-      fetchImpl: async () => ({ status: 200, body: bodyStream(env.pointer.gz) }),
+      fetchImpl: async () => ({ status: 200, body: bodyStream(env.pointer.gz, { chunkSize: 256 }) }),
       random: () => 'aaaaaaaa',
-      // The worker handles `status` and `cancel` in this hook.
-      yieldToLoop: async () => seen.push(installer.operation().phase)
+      monotonicNow: () => { clock += 40; return clock; },
+      verifyBatchBytes: 4096,
+      // The worker answers `status` and `cancel` in these macrotasks.
+      yieldToMacrotask: async () => { seen.push(installer.operation().phase); }
     });
     const result = await installer.install({ pointer: env.pointer, profile: PROFILE, operationId: 'op1' });
     expect(result.status).toBe('installed');
-    expect(seen.length).toBeGreaterThan(0);
-    expect(seen.every((phase) => phase === 'verifying')).toBe(true);
+    expect(seen).toContain('downloading');
+    expect(seen).toContain('verifying');
+    // Never during the commit: the budget belongs to the bounded work units.
+    expect(seen).not.toContain('committing');
+  });
+
+  it('no yield happens while the budget has not elapsed', async () => {
+    const env = setup();
+    let yields = 0;
+    const installer = createInstaller({
+      pool: env.pool,
+      bridge: env.bridge,
+      fetchImpl: async () => ({ status: 200, body: bodyStream(env.pointer.gz, { chunkSize: 256 }) }),
+      random: () => 'aaaaaaaa',
+      monotonicNow: () => 0, // time stands still
+      yieldToMacrotask: async () => { yields += 1; }
+    });
+    await installer.install({ pointer: env.pointer, profile: PROFILE, operationId: 'op1' });
+    expect(yields).toBe(0);
   });
 
   // Review finding 10: the inactivity deadline covers the header wait too.

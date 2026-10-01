@@ -19,3 +19,4 @@ refs/
 *_result.json
 # throwaway Chrome profile for live tests
 .dev-profile/
+.dev-profile-*/

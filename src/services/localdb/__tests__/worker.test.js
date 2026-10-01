@@ -41,8 +41,13 @@ const setup = ({ settings = {}, poolOpts = {}, rows = [], bytes = dbBytes(), des
   const pointer = pointerFor({ profile: PROFILE, bytes, sha256Hex });
   // Every SQL call that reaches a handle, so a test can assert there were none.
   const execCalls = [];
+  let acquiredResolve;
+  const acquired = new Promise((resolve) => { acquiredResolve = resolve; });
   const dispatcher = createWorkerDispatcher({
-    post: (message) => sent.push(message),
+    post: (message) => {
+      sent.push(message);
+      if (message.type === 'rpc-result' && message.id === 'acquire-0') acquiredResolve(message);
+    },
     createPool: async () => ({
       ...pool,
       open: async (name, opts) => {
@@ -59,8 +64,12 @@ const setup = ({ settings = {}, poolOpts = {}, rows = [], bytes = dbBytes(), des
     }),
     createInstallerImpl: undefined,
     bridgeTimeoutMs: 1000,
-    yieldToLoop: () => Promise.resolve()
+    yieldToMacrotask: () => new Promise((resolve) => { setTimeout(resolve, 0); })
   });
+  // §3.2 rule 3: like the real client, the page acquires FIRST and sends
+  // recovery, queries and mutations only after the acquisition succeeded.
+  dispatcher.handleMessage({ type: 'rpc', id: 'acquire-0', op: 'acquire', args: {}, workerGeneration: GENERATION });
+  let chain = acquired;
 
   // The page half: answer every bridge request the worker sends.
   const pump = async (ticks = 30) => {
@@ -78,8 +87,10 @@ const setup = ({ settings = {}, poolOpts = {}, rows = [], bytes = dbBytes(), des
     }
   };
 
+  // Messages keep their order, and none is sent before the acquisition answered.
   const rpc = (id, op, args = {}, generation = GENERATION) => {
-    dispatcher.handleMessage({ type: 'rpc', id, op, args, workerGeneration: generation });
+    chain = chain.then(() => dispatcher.handleMessage({ type: 'rpc', id, op, args, workerGeneration: generation }));
+    return chain;
   };
   const resultOf = (id) => sent.find((m) => m.type === 'rpc-result' && m.id === id);
   const bridgesOf = () => sent.filter((m) => m.type === 'bridge');

@@ -26,6 +26,7 @@ export const STATE_TEXT = {
   'repair-needed': 'The local database is damaged or missing.',
   'recovery-unavailable': 'Local database settings could not be read.',
   'worker-failed': 'The local database could not be started in this tab.',
+  db_busy: 'The local database is still busy. Nothing was changed; reload the page to try again.',
   starting: 'Opening the local database…'
 };
 

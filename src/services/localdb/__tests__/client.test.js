@@ -8,28 +8,53 @@ const RECORD = {
   dbSize: 4096, sha256Db: 'b'.repeat(64), compatFingerprint: 'FP', installedAt: '2026-09-27T00:00:00.000Z'
 };
 
-/** A fake Worker: it records what the page sent and lets a test answer. */
-const fakeWorker = () => {
+/**
+ * A fake Worker: it records what the page sent and lets a test answer.
+ *
+ * SPEC-P5 v2.5 §3.2: every worker first gets an `acquire` RPC. By default the
+ * fake acquires successfully at once (`acquire: 'ok'`); `'contention'`,
+ * `'fail'` or `'hang'` model the other outcomes. `answer()`/`reject()` for an
+ * RPC that has not been posted yet are QUEUED and delivered when it arrives.
+ */
+const fakeWorker = ({ acquire = 'ok' } = {}) => {
   const listeners = { message: new Set(), error: new Set(), messageerror: new Set() };
   const sent = [];
+  const queued = [];
   const worker = {
     sent,
     terminated: false,
     addEventListener: (type, fn) => listeners[type]?.add(fn),
-    postMessage: (message) => sent.push(message),
+    postMessage: (message) => {
+      sent.push(message);
+      if (worker.terminated || message?.type !== 'rpc') return;
+      if (message.op === 'acquire') {
+        if (acquire === 'ok') queueMicrotask(() => worker.emit({ type: 'rpc-result', id: message.id, ok: true, result: { acquired: true } }));
+        else if (acquire === 'contention') queueMicrotask(() => worker.emit({ type: 'rpc-result', id: message.id, ok: false, error: { kind: 'db_contention' } }));
+        else if (acquire === 'fail') queueMicrotask(() => worker.emit({ type: 'rpc-result', id: message.id, ok: false, error: { kind: 'db_init_failed' } }));
+        return;
+      }
+      const at = queued.findIndex((q) => q.op === message.op);
+      if (at >= 0) {
+        const [q] = queued.splice(at, 1);
+        queueMicrotask(() => worker.emit({ type: 'rpc-result', id: message.id, ...q.payload }));
+      }
+    },
     terminate: () => { worker.terminated = true; },
     /** Deliver a message from the worker to the page. */
     emit: (data) => listeners.message.forEach((fn) => fn({ data })),
     fail: () => listeners.error.forEach((fn) => fn(new Event('error'))),
     failMessage: () => listeners.messageerror.forEach((fn) => fn(new Event('messageerror'))),
     lastRpc: (op) => [...sent].reverse().find((m) => m.type === 'rpc' && (!op || m.op === op)),
-    answer: (op, result) => {
+    answer: (op, result) => worker.settle(op, { ok: true, result }),
+    reject: (op, kind) => worker.settle(op, { ok: false, error: { kind } }),
+    settle: (op, payload) => {
       const rpc = worker.lastRpc(op);
-      worker.emit({ type: 'rpc-result', id: rpc.id, ok: true, result });
-    },
-    reject: (op, kind) => {
-      const rpc = worker.lastRpc(op);
-      worker.emit({ type: 'rpc-result', id: rpc.id, ok: false, error: { kind } });
+      if (rpc && !rpc.__settled) {
+        rpc.__settled = true;
+        worker.emit({ type: 'rpc-result', id: rpc.id, ...payload });
+      } else {
+        queued.push({ op, payload });
+      }
     }
   };
   return worker;
@@ -42,13 +67,11 @@ const startedClient = async ({ recovery = { state: 'ready', record: RECORD }, ..
     createWorker: () => {
       const worker = fakeWorker();
       workers.push(worker);
-      // Answer `recover` as soon as the page asks.
-      queueMicrotask(() => {
-        if (worker.lastRpc('recover')) worker.answer('recover', recovery);
-      });
+      // Answer `recover` as soon as the page asks (after the acquisition).
+      worker.answer('recover', recovery);
       return worker;
     },
-    statusTimeoutMs: 50,
+    hangMs: 50,
     ...opts
   });
   const state = await client.start();
@@ -151,12 +174,13 @@ describe('[P5 row9] worker crashes', () => {
       createWorker: () => {
         const worker = fakeWorker();
         workers.push(worker);
-        // Only the first worker answers; the replacement hangs on `recover`.
+        // Only the first worker answers; the replacement hangs on `recover`
+        // and never answers a status probe either: the §3.2 hang rule.
         if (workers.length === 1) queueMicrotask(() => worker.answer('recover', { state: 'ready', record: RECORD }));
         return worker;
       },
-      statusTimeoutMs: 20,
-      probeMs: 100000
+      hangMs: 20,
+      probeMs: 5
     });
     await client.start();
     expect(client.state()).toBe('ready');
@@ -182,7 +206,7 @@ describe('[P5 row9] worker crashes', () => {
         else queueMicrotask(() => worker.fail());
         return worker;
       },
-      statusTimeoutMs: 100000,
+      hangMs: 100000,
       probeMs: 100000
     });
     await client.start();
@@ -199,20 +223,43 @@ describe('[P5 row9] worker crashes', () => {
     client.dispose();
   });
 
-  it('a worker that says nothing at all is treated as a crash by the watchdog', async () => {
+  it('a worker that never answers recovery nor a probe is a HANG and is replaced', async () => {
     const workers = [];
     const client = createLocalDbClient({
       createWorker: () => {
         const worker = fakeWorker();
         workers.push(worker);
-        return worker; // never answers
+        return worker; // acquires, then never answers
       },
-      statusTimeoutMs: 10
+      hangMs: 10,
+      probeMs: 3
     });
     const started = client.start();
     await new Promise((resolve) => setTimeout(resolve, 60));
     await started.catch(() => {});
     expect(workers.length).toBeGreaterThanOrEqual(2);
+    expect(workers[0].terminated).toBe(true);
+    client.dispose();
+  });
+
+  it('an ACQUISITION that never answers is caught by the startup watchdog', async () => {
+    const workers = [];
+    const client = createLocalDbClient({
+      createWorker: () => {
+        const worker = fakeWorker({ acquire: 'hang' });
+        workers.push(worker);
+        return worker;
+      },
+      hangMs: 10,
+      acquireBudgetMs: 10,
+      probeMs: 100000
+    });
+    client.start();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    // First worker hung → one replacement → it hangs too → this document gives up.
+    expect(workers).toHaveLength(2);
+    expect(workers.every((w) => w.terminated)).toBe(true);
+    expect(client.state()).toBe('worker-failed');
     client.dispose();
   });
 
@@ -254,15 +301,17 @@ describe('[P5 row9] the settings bridge', () => {
       createWorker: () => {
         const worker = fakeWorker();
         workers.push(worker);
-        queueMicrotask(() => {
-          worker.emit(bridged({ workerGeneration: 1, operationId: RECOVERY_OPERATION, action: 'read' }));
-        });
         return worker;
       },
-      statusTimeoutMs: 1000
+      hangMs: 1000
     });
     fakes.storage.seed({ lookupBackend: 'local-db', localDb: RECORD, localDbPendingDeletes: ['/x.db'] });
     const starting = client.start();
+    // The recovery operation exists only once the pool is acquired (§3.2
+    // rule 3), so the worker's read is sent when its `recover` RPC arrives.
+    for (let i = 0; i < 20 && !workers[0]?.lastRpc('recover'); i++) await yieldTicks(2);
+    expect(workers[0].lastRpc('acquire')).toBeTruthy();
+    workers[0].emit(bridged({ workerGeneration: client.workerGeneration(), operationId: RECOVERY_OPERATION, action: 'read' }));
     await yieldTicks(30);
     expect(answerOf(workers[0])).toEqual({
       type: 'bridge-result',
@@ -408,7 +457,7 @@ describe('[P5 row9] worker replacement drains the admitted commit handlers', () 
         return worker;
       },
       settingsApi,
-      statusTimeoutMs: 10000
+      hangMs: 10000
     });
     const starting = client.start();
     await yieldTicks(4);
@@ -447,7 +496,7 @@ describe('[P5 fix4] the watchdog keeps watching after the first message', () => 
         else queueMicrotask(() => worker.answer('recover', { state: 'ready', record: RECORD }));
         return worker;
       },
-      statusTimeoutMs: 20,
+      hangMs: 20,
       probeMs: 10
     });
     await client.start();
@@ -481,7 +530,7 @@ describe('[P5 fix4] the watchdog keeps watching after the first message', () => 
         worker.pump = setInterval(answerAll, 2);
         return worker;
       },
-      statusTimeoutMs: 40,
+      hangMs: 40,
       probeMs: 5
     });
     await client.start();

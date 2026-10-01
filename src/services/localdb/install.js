@@ -18,6 +18,9 @@ import {
   InstallError, coalescingPull, streamDatabase, PROGRESS_INTERVAL_MS, STALL_TIMEOUT_MS, MIN_FIRST_CHUNK
 } from './download';
 import { validateLocalDbSnapshot, isPoolFileName } from './record';
+import {
+  createWorkBudget, WORK_BUDGET_MS, monotonicNow as defaultMonotonic, macrotask as defaultMacrotask
+} from './budget';
 
 export { InstallError, coalescingPull, PROGRESS_INTERVAL_MS, STALL_TIMEOUT_MS, MIN_FIRST_CHUNK };
 
@@ -58,10 +61,14 @@ export const stagingName = ({ profile, release, taken, random }) => {
   throw new InstallError('storage');
 };
 
+/** One read-back unit: bounded so one unit of xRead + hashing stays well under the budget. */
+export const VERIFY_BATCH_BYTES = 1024 * 1024;
+
 /**
  * Create the installer.
  * @param {{pool:object, bridge:object, fetchImpl?:Function, random?:()=>string, now?:()=>number,
- *   onProgress?:Function, onPhase?:Function, onGate?:Function, yieldToLoop?:Function,
+ *   onProgress?:Function, onPhase?:Function, onGate?:Function, monotonicNow?:()=>number,
+ *   yieldToMacrotask?:()=>Promise<void>, budgetMs?:number, verifyBatchBytes?:number,
  *   decompressionStream?:Function, stallMs?:number}} deps - Injected environment
  * @returns {object} - The installer
  */
@@ -74,7 +81,11 @@ export const createInstaller = ({
   onProgress = () => {},
   onPhase = () => {},
   onGate = () => {},
-  yieldToLoop = () => new Promise((resolve) => setTimeout(resolve, 0)),
+  // §4.4 step 7b: a monotonic clock and a REAL macrotask scheduler.
+  monotonicNow = defaultMonotonic,
+  yieldToMacrotask = defaultMacrotask,
+  budgetMs = WORK_BUDGET_MS,
+  verifyBatchBytes = VERIFY_BATCH_BYTES,
   decompressionStream = () => new DecompressionStream('gzip'),
   stallMs = STALL_TIMEOUT_MS
 }) => {
@@ -107,7 +118,15 @@ export const createInstaller = ({
   };
   const ensureFree = (operationId) => {
     if (mutation) throw new InstallError('busy');
-    mutation = { operationId, phase: 'preparing', cancelled: false, controller: new AbortController() };
+    mutation = {
+      operationId,
+      phase: 'preparing',
+      cancelled: false,
+      controller: new AbortController(),
+      // §4.4 step 7b: ONE budget for the whole mutation — import pull, hashing
+      // and the stored-byte read-back share it.
+      budget: createWorkBudget({ now: monotonicNow, yieldToMacrotask, budgetMs })
+    };
   };
   const checkCancelled = () => {
     if (mutation.cancelled) throw new InstallError('cancelled');
@@ -195,6 +214,7 @@ export const createInstaller = ({
       decompressionStream,
       stallMs,
       now,
+      checkpoint: () => mutation.budget.checkpoint(),
       onProgress: (event) => onProgress({ operationId: mutation.operationId, ...event })
     });
   };
@@ -202,12 +222,20 @@ export const createInstaller = ({
   /** §4.5 steps 2–6 on the imported staging file. */
   const verifyStaging = async ({ handle, entry, profile, compatFingerprint }) => {
     setPhase('verifying');
+    let lastProgress = -Infinity;
     const stored = await hashStoredBytes(await handle.vfs(), {
       size: entry.dbSize,
+      // Bounded read + hash units, so one unit stays well under the budget.
+      bufferBytes: verifyBatchBytes,
       onBatch: async (done, total) => {
-        onProgress({ operationId: mutation.operationId, phase: 'verifying', done, total });
-        // The worker answers `status` and `cancel` here, between batches.
-        await yieldToLoop();
+        // Progress at most every 500 ms (§4.4 step 7), and the last batch.
+        if (monotonicNow() - lastProgress >= PROGRESS_INTERVAL_MS || done === total) {
+          lastProgress = monotonicNow();
+          onProgress({ operationId: mutation.operationId, phase: 'verifying', done, total });
+        }
+        // §4.4 step 7b: the shared budget decides when to yield a MACROTASK,
+        // where the worker answers `status` and `cancel`; then recheck.
+        await mutation.budget.checkpoint();
         checkCancelled();
       }
     });

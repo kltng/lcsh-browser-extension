@@ -96,7 +96,8 @@ const meteredStream = (hash, limit) => new TransformStream({
  * @returns {Promise<void>}
  */
 export const streamDatabase = async ({
-  entry, staging, pool, controller, isCancelled, fetchImpl, decompressionStream, stallMs, now, onProgress
+  entry, staging, pool, controller, isCancelled, fetchImpl, decompressionStream, stallMs, now, onProgress,
+  checkpoint = async () => false
 }) => {
   // Review finding 10: the inactivity deadline starts BEFORE the fetch, so a
   // request whose headers never arrive stops the install as well; it is reset
@@ -153,6 +154,10 @@ export const streamDatabase = async ({
     let lastProgress = 0;
     const report = () => onProgress({ phase: 'downloading', done: gzHash.bytes(), total: entry.gzSize });
 
+    // One call = one bounded work unit: one stream chunk (already metered and
+    // hashed by the transforms), which the importer then writes synchronously.
+    // Nothing is read ahead: the next chunk is requested only when the
+    // importer asks for it, so backpressure is unchanged.
     const next = async () => {
       if (isCancelled()) throw new InstallError('cancelled');
       let step;
@@ -167,6 +172,12 @@ export const streamDatabase = async ({
         lastProgress = now();
         report();
       }
+      // §4.4 step 7b: a buffered read resolves as a MICROTASK, so without this
+      // the worker never gets a turn to answer `status` or `cancel`. The
+      // shared budget yields a MACROTASK every 100 ms; cancellation is
+      // rechecked after it and before this chunk is handed to the importer.
+      await checkpoint();
+      if (isCancelled()) throw new InstallError('cancelled');
       return step.value;
     };
 

@@ -12,14 +12,26 @@
  *    worker generation and the RUNNING operation, and rechecks both
  *    immediately before the write (HOUSE_RULES 13);
  *  - replacing the worker drains every ADMITTED commit handler before the new
- *    worker's §3.4 recovery starts (§3.3).
+ *    worker's §3.4 recovery starts (§3.3);
+ *  - the pool is acquired NON-DESTRUCTIVELY (§3.2 rules 1–3): each worker
+ *    makes exactly one guarded attempt; contention is retried with backoff for
+ *    up to 30 s, each time in a FRESH worker, and only after the drain;
+ *    recovery and queries start only after a successful acquisition;
+ *  - a worker HANGS only when it gives no `status` answer AND no progress of
+ *    the running operation for 30 s (§3.2), so a busy install is never
+ *    mistaken for a dead worker.
  */
 import { readLocalDbSettings, commitLocalDb } from '../settings';
 
 export const OWNER_LOCK = 'lcsh-localdb-owner';
-export const STATUS_TIMEOUT_MS = 10000;
+/** §3.2: no `status` answer AND no progress event for this long = a hang. */
+export const HANG_MS = 30000;
 /** How often the client asks the worker for a status while it owns one (§3.2). */
 export const STATUS_PROBE_MS = 10000;
+/** §3.2 rule 2: how long contention is retried, counted from the first attempt after the drain. */
+export const ACQUIRE_BUDGET_MS = 30000;
+/** Backoff between contention attempts; the last value repeats. */
+export const ACQUIRE_BACKOFF_MS = [250, 500, 1000, 2000];
 /** One re-create after the first crash; a second crash gives up for this document. */
 export const MAX_WORKER_STARTS = 2;
 export const RECOVERY_OPERATION = 'internal-recovery';
@@ -29,6 +41,11 @@ export const FINAL_PHASES = ['committing', 'cleaning'];
 const MESSAGES = {
   db_worker_failed: 'The local database stopped responding.',
   db_busy: 'The local database is in use. Close the other tab and try again.',
+  // §3.2 acquisition kinds. They must survive the trip to the page: the retry
+  // decision depends on recognizing `db_contention` exactly.
+  db_contention: 'The local database is still held by a previous worker.',
+  db_init_failed: 'The local database storage could not be opened.',
+  db_guard_failed: 'The local database storage cannot be protected in this browser.',
   db_generation_changed: 'The local database changed while this search was running.',
   db_not_ready: 'The local database is not available in this tab.',
   cancelled: 'Cancelled.'
@@ -46,16 +63,23 @@ export class LocalDbError extends Error {
 
 /**
  * Create the owner client.
- * @param {{createWorker:Function, locks?:object, settingsApi?:object, statusTimeoutMs?:number,
- *   onChange?:Function, onProgress?:Function}} deps - Injected environment
+ * @param {{createWorker:Function, locks?:object, settingsApi?:object, hangMs?:number, probeMs?:number,
+ *   acquireBudgetMs?:number, backoffMs?:(attempt:number)=>number, now?:()=>number,
+ *   sleep?:(ms:number)=>Promise<void>, onChange?:Function, onProgress?:Function}} deps - Injected environment
  * @returns {object}
  */
 export const createLocalDbClient = ({
   createWorker,
   locks = navigator.locks,
   settingsApi = { read: readLocalDbSettings, commit: commitLocalDb },
-  statusTimeoutMs = STATUS_TIMEOUT_MS,
+  hangMs = HANG_MS,
   probeMs = STATUS_PROBE_MS,
+  acquireBudgetMs = ACQUIRE_BUDGET_MS,
+  backoffMs = (attempt) => ACQUIRE_BACKOFF_MS[Math.min(attempt, ACQUIRE_BACKOFF_MS.length - 1)],
+  // A MONOTONIC clock: the hang rule and the acquisition deadline must not
+  // jump with the wall clock.
+  now = () => globalThis.performance.now(),
+  sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); }),
   onChange = () => {},
   onProgress = () => {}
 }) => {
@@ -72,6 +96,13 @@ export const createLocalDbClient = ({
   let probe = null;
   let replacing = null;
   let givingUp = null;
+  // Raised by dispose() and giveUp(): a boot that started earlier stops at its
+  // next await instead of spawning another worker.
+  let epoch = 0;
+  // §3.2 liveness: the last `status` answer or progress event of the CURRENT
+  // worker generation and running operation.
+  let lastSign = 0;
+  let probeGeneration = null;
   // Review finding 9: the operation and its progress belong to the DOCUMENT,
   // not to the mounted Settings panel, so leaving and returning to Settings
   // during an install shows the same state.
@@ -128,6 +159,8 @@ export const createLocalDbClient = ({
     pending.clear();
   };
 
+  const markAlive = () => { lastSign = now(); };
+
   const clearWatchdog = () => {
     if (watchdog) clearTimeout(watchdog);
     watchdog = null;
@@ -180,6 +213,12 @@ export const createLocalDbClient = ({
       handleBridge(message, source);
       return;
     }
+    if (message.type === 'phase' || message.type === 'progress') {
+      // §3.2: progress counts as liveness, but ONLY progress of the running
+      // operation of THIS worker generation (the `source` fence above already
+      // rejects every replaced worker).
+      if (runningOperation !== null && message.operationId === runningOperation) markAlive();
+    }
     if (message.type === 'phase') {
       setPhase(message.operationId, message.phase);
       return;
@@ -221,10 +260,25 @@ export const createLocalDbClient = ({
    */
   function giveUp() {
     if (givingUp) return givingUp;
+    epoch += 1;
+    dropWorker();
+    runningOperation = null;
+    setState('worker-failed', { record: null });
+    // Draining is preserved: already-issued writes still settle.
+    givingUp = Promise.allSettled([...admitted]).then(() => {}).finally(() => { givingUp = null; });
+    return givingUp;
+  }
+
+  /**
+   * Terminate the CURRENT worker and invalidate everything it could still
+   * say: the generation is raised FIRST, so a bridge request still in flight
+   * can no longer be admitted, and an admitted one fails its fence.
+   * Terminating also releases every pool handle that worker holds.
+   */
+  function dropWorker() {
     generation += 1;
     clearWatchdog();
     clearProbe();
-    runningOperation = null;
     rejectPending('db_worker_failed');
     try {
       worker?.terminate();
@@ -232,10 +286,91 @@ export const createLocalDbClient = ({
       // Already gone.
     }
     worker = null;
-    setState('worker-failed', { record: null });
-    // Draining is preserved: already-issued writes still settle.
-    givingUp = Promise.allSettled([...admitted]).then(() => {}).finally(() => { givingUp = null; });
-    return givingUp;
+  }
+
+  /** Create one worker of a NEW generation and wire its events. */
+  function spawn() {
+    starts += 1;
+    generation += 1;
+    const myGeneration = generation;
+    worker = createWorker();
+    const source = worker;
+    worker.addEventListener('message', (event) => handleMessage(event.data, source));
+    worker.addEventListener('error', () => crash(myGeneration));
+    worker.addEventListener('messageerror', () => crash(myGeneration));
+    return myGeneration;
+  }
+
+  /**
+   * §3.2 rules 2–3: acquire the pool, each attempt in a FRESH guarded worker.
+   * Only contention is retried, with backoff, until the acquisition deadline,
+   * which starts HERE — after any §3.3 drain the caller performed.
+   * @param {number} myEpoch - The boot this belongs to
+   * @returns {Promise<'acquired'|'busy'|'failed'|'stale'>}
+   */
+  async function acquireInFreshWorkers(myEpoch) {
+    const deadline = now() + acquireBudgetMs;
+    for (let attempt = 0; ; attempt += 1) {
+      const myGeneration = spawn();
+      // Initialization stays monitored — but by a watchdog that outlasts the
+      // whole acquisition window, so the two can never race (§3.2 rule 3).
+      clearWatchdog();
+      watchdog = setTimeout(() => crash(myGeneration), Math.max(0, deadline - now()) + hangMs);
+      try {
+        await call('acquire', {});
+        clearWatchdog();
+        return generation === myGeneration && epoch === myEpoch ? 'acquired' : 'stale';
+      } catch (err) {
+        clearWatchdog();
+        // Crashed, replaced, given up or disposed meanwhile: not ours any more.
+        if (generation !== myGeneration || epoch !== myEpoch) return 'stale';
+        const contention = err?.kind === 'db_contention';
+        // A worker that failed to acquire is NEVER reused: the pinned
+        // initializer caches its rejection, and a late handle request can
+        // still succeed in the abandoned pool. Terminating it releases that.
+        dropWorker();
+        if (!contention) return 'failed';
+        const wait = backoffMs(attempt);
+        // Exhaustion is `db_busy`; nothing is deleted and no recovery runs,
+        // so an unresolved commit's staging file is never cleaned up here.
+        if (now() + wait >= deadline) return 'busy';
+        await sleep(wait);
+        if (epoch !== myEpoch) return 'stale';
+      }
+    }
+  }
+
+  /**
+   * Bring up a worker: guarded acquisition first, recovery only after it
+   * succeeded, then the liveness probes.
+   * @returns {Promise<void>}
+   */
+  async function boot() {
+    const myEpoch = epoch;
+    const outcome = await acquireInFreshWorkers(myEpoch);
+    if (outcome === 'stale' || epoch !== myEpoch) return;
+    if (outcome === 'busy') {
+      setState('db_busy', { record: null });
+      return;
+    }
+    if (outcome === 'failed') {
+      setState('worker-failed', { record: null });
+      return;
+    }
+    const myGeneration = generation;
+    runningOperation = RECOVERY_OPERATION;
+    // Recovery is monitored by the §3.2 hang rule from its first moment.
+    markAlive();
+    scheduleProbe(myGeneration);
+    try {
+      const result = await call('recover', { operationId: RECOVERY_OPERATION });
+      if (generation !== myGeneration) return;
+      setState(result.state, { record: result.record ?? null });
+    } catch (err) {
+      if (generation === myGeneration) crash(myGeneration);
+    } finally {
+      if (generation === myGeneration && runningOperation === RECOVERY_OPERATION) runningOperation = null;
+    }
   }
 
   const crash = (myGeneration) => {
@@ -250,73 +385,46 @@ export const createLocalDbClient = ({
   function replaceWorker() {
     // Serialize: two crash signals must not start two workers.
     if (replacing) return replacing;
-    // The generation is raised FIRST, so a bridge request that is still in
-    // flight can no longer be admitted, and an admitted one fails its fence.
-    generation += 1;
-    clearWatchdog();
-    clearProbe();
-    rejectPending('db_worker_failed');
-    try {
-      worker?.terminate();
-    } catch (e) {
-      // Already gone.
-    }
-    worker = null;
+    dropWorker();
     replacing = (async () => {
       // Drain: already-issued writes finish before the new worker starts.
+      // The acquisition budget starts only after this, and never bounds it.
       await Promise.allSettled([...admitted]);
       if (crashes >= MAX_WORKER_STARTS) {
         await giveUp();
         return;
       }
-      await startWorker();
+      await boot();
     })().finally(() => { replacing = null; });
     return replacing;
   }
 
   /**
-   * Review finding 4: one status probe every `probeMs`, each with its OWN
-   * deadline. A worker that answers once and then goes silent is replaced.
+   * §3.2 hang rule: a probe every `probeMs`; the worker HANGS only when it gave
+   * no `status` answer AND no progress of the running operation for `hangMs`.
+   * A busy install that is still reporting progress is alive even if a probe
+   * answer is late.
    */
   function scheduleProbe(myGeneration) {
     clearProbe();
-    probe = setTimeout(async () => {
+    probe = setTimeout(() => {
+      probe = null;
       if (generation !== myGeneration || !worker) return;
-      const deadline = setTimeout(() => crash(myGeneration), statusTimeoutMs);
-      try {
-        await call('status', {});
-      } catch (err) {
-        // A replaced worker rejects its pending calls; the crash path owns it.
-      } finally {
-        clearTimeout(deadline);
+      if (now() - lastSign >= hangMs) {
+        crash(myGeneration);
+        return;
       }
-      if (generation === myGeneration && worker) scheduleProbe(myGeneration);
+      if (probeGeneration !== myGeneration) {
+        probeGeneration = myGeneration;
+        call('status', {}).then(
+          () => { if (generation === myGeneration) markAlive(); },
+          () => {}
+        ).finally(() => {
+          if (probeGeneration === myGeneration) probeGeneration = null;
+        });
+      }
+      scheduleProbe(myGeneration);
     }, probeMs);
-  }
-
-  async function startWorker() {
-    starts += 1;
-    generation += 1;
-    const myGeneration = generation;
-    runningOperation = RECOVERY_OPERATION;
-    worker = createWorker();
-    const source = worker;
-    worker.addEventListener('message', (event) => handleMessage(event.data, source));
-    worker.addEventListener('error', () => crash(myGeneration));
-    worker.addEventListener('messageerror', () => crash(myGeneration));
-    watchdog = setTimeout(() => crash(myGeneration), statusTimeoutMs);
-    try {
-      const result = await call('recover', { operationId: RECOVERY_OPERATION });
-      clearWatchdog();
-      setState(result.state, { record: result.record ?? null });
-      if (generation === myGeneration) scheduleProbe(myGeneration);
-    } catch (err) {
-      clearWatchdog();
-      crash(myGeneration);
-    } finally {
-      if (generation === myGeneration) runningOperation = null;
-      clearWatchdog();
-    }
   }
 
   function call(op, args, { signal } = {}) {
@@ -397,7 +505,7 @@ export const createLocalDbClient = ({
         setState('other-tab', { record: null });
         return state;
       }
-      await startWorker();
+      await boot();
       return state;
     },
     /** "Try again" after the owner tab closed. */
@@ -465,15 +573,8 @@ export const createLocalDbClient = ({
     workerStarts: () => starts,
     /** Tests and page teardown; in the browser the document's end does this. */
     dispose() {
-      clearWatchdog();
-      clearProbe();
-      rejectPending('db_worker_failed');
-      try {
-        worker?.terminate();
-      } catch (e) {
-        // Already gone.
-      }
-      worker = null;
+      epoch += 1;
+      dropWorker();
       if (releaseLock) releaseLock();
       releaseLock = null;
       setState('starting', { record: null });
