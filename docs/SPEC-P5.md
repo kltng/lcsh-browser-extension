@@ -1,6 +1,6 @@
 # SPEC-P5 — Local LCSH database in the extension
 
-Status: v2.4, 2026-10-01 (round 2 §17; round 3 §18; live findings §19; reviewer edits to them §20). v1 was REJECTED (14 findings, 4 HIGH;
+Status: v2.5, 2026-10-01 (round 2 §17; round 3 §18; live findings §19; reviewer edits to them §20). v1 was REJECTED (14 findings, 4 HIGH;
 `.dispatch/spec-review-p5-1/last_message.md`; v1 archived at
 `.dispatch/SPEC-P5.v1.md`). §16 maps each finding to its fix. Builds on
 SPEC-P4 (lookup step, Candidate, honesty rule) and the builder contract
@@ -131,13 +131,21 @@ The SAH-pool VFS needs exclusive access, even for read-only use.
      Justification: in the pinned package the only recursive removals are
      `removeVfs()` and the `opfs`-VFS `rmfr` helpers, which this extension
      does not use; this extension's own code never removes a directory.
-     Non-recursive `removeEntry` (slot files) is untouched.
+     Non-recursive `removeEntry` (slot files) is untouched. Install and
+     verify the guard BEFORE acquisition; abort initialization if installing
+     it fails. Forward permitted calls with the original receiver and
+     arguments. Acquire with `clearOnInit: false`. The guard prevents
+     recursive directory deletion; it does not disable the pinned library's
+     own metadata sanitation of invalid or unassociated slots.
   2. Retry ONLY `NoModificationAllowedError` (contention), with backoff, for
-     up to 30 s. Each retry is a FRESH acquisition
-     (`forceReinitIfPreviouslyFailed: true`), never a cached rejection.
-     Every failed attempt settles and releases whatever it acquired before
-     the next one. Exhaustion reports `db_busy`, preserving files and
-     settings.
+     up to 30 s. An initializer rejection is NOT a barrier for its handle
+     requests (the library acquires with a fail-fast `Promise.all`, so a
+     late request can still succeed after the failure cleanup and keep a
+     handle in the abandoned pool). Therefore **each retry happens in a
+     FRESH guarded worker**: the failed worker is terminated (which releases
+     everything it holds once it is gone) and a new worker repeats the
+     guarded acquisition. Never retry inside the same worker. Exhaustion
+     reports `db_busy`, preserving files and settings.
   3. The acquisition retry budget starts with acquisition, AFTER the §3.3
      drain, and never bounds or bypasses that drain. Startup monitoring
      allows the full acquisition window without racing an equal-duration
@@ -678,7 +686,9 @@ to them.
    import AND verification, and that status/cancel are served before
    completion; progress-aware watchdog expiry and stale-progress rejection
    (an old generation's progress does not count); contention retries through
-   the 30 s deadline with a fresh acquisition each time; drain-before-
+   the 30 s deadline, each in a FRESH worker; the fail-fast case (request A
+   rejects, request B succeeds after the failure cleanup) leaves B's handle
+   released by the worker's termination and the next acquisition succeeds; drain-before-
    recovery ordering; **the removeEntry guard: a recursive removal is
    refused, a non-recursive one passes, and an init failure under contention
    leaves every pool file in place** (fake FileSystem handles). Chrome
@@ -794,3 +804,8 @@ acquisitions, contention-only retries, `db_busy` on exhaustion), deadline
 ordering against the §3.3 drain and recovery, current-generation-only
 liveness; §4.4 step 7b a cooperative monotonic budget with backpressure and
 cancellation rechecks; §4.5 the stale 10 s sentence; §12 row 13 the tests.
+
+Confirmation of the guard (review 5): APPROVE-WITH-CHANGES, no HIGH. Folded
+into v2.5: guard installed and verified before acquisition, `clearOnInit:
+false`, retries in a fresh worker (the fail-fast `Promise.all` can leave a
+late handle), and the matching §12 test.
