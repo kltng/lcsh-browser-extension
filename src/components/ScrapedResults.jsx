@@ -105,6 +105,18 @@ export const MatchesPanel = ({
   </Box>
 );
 
+/**
+ * "Build recommendations": build them, then show the Recommendations step.
+ * Leaving the Matches step right after the build must NOT stop the name-key
+ * operation the build just started (SPEC-P5 §7).
+ * @param {object} workflow - The workflow controller
+ * @param {(step:number)=>void} setActiveStep - The context's step setter
+ */
+export const buildAndShowRecommendations = (workflow, setActiveStep) => {
+  workflow.build();
+  setActiveStep(3);
+};
+
 const ScrapedResults = () => {
   const { run, workflow, setActiveStep, localDbClient } = useAppContext();
   const [notice, setNotice] = useState(null);
@@ -123,10 +135,7 @@ const ScrapedResults = () => {
   }, [localDbClient, run.run.runId]);
 
   const handleSettings = () => { window.location.hash = 'settings'; };
-  const handleBuild = () => {
-    workflow.build();
-    setActiveStep(3);
-  };
+  const handleBuild = () => buildAndShowRecommendations(workflow, setActiveStep);
 
   return (
     <Box>

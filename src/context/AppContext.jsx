@@ -75,7 +75,9 @@ export const AppProvider = ({ children, localDbClient = null, localDbUpdates = n
   const workflowRef = useRef(null);
   if (!workflowRef.current) workflowRef.current = createWorkflow({ loadConfig: loadActiveConfig, localClient: localDbClient });
   const workflow = workflowRef.current;
-  const run = useSyncExternalStore(workflow.subscribe, workflow.getState);
+  // The third argument (the server snapshot) is the same state; the app is
+  // client-rendered, and it lets a test render this provider with react-dom/server.
+  const run = useSyncExternalStore(workflow.subscribe, workflow.getState, workflow.getState);
 
   const [activeStep, setActiveStepState] = useState(0);
   const activeStepRef = useRef(0);

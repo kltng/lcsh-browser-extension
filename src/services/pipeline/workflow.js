@@ -214,6 +214,13 @@ export const createWorkflow = ({
 
   /**
    * Leave a step: its pending operation (running or still preparing) is aborted and invalidated.
+   *
+   * The name-key operation is NOT a step operation. SPEC-P5 §7 lists exactly
+   * what aborts and invalidates it — a new run, a relevant lookup retry, a
+   * changed choice, or disposal — and a step change is none of these. It is
+   * started by "Build recommendations", which then leaves the Matches step
+   * at once; aborting it here killed every name-key lookup before its first
+   * request (live finding, §13 row 3).
    * @param {'suggest'|'lookup'|'select'} step - The step left
    */
   const leave = (step) => {
@@ -227,8 +234,7 @@ export const createWorkflow = ({
     }
     if (step === 'select') {
       abortSelect();
-      abortNameKeys();
-      update((s) => invalidateNameKeys(invalidateSelect(s)));
+      update(invalidateSelect);
     }
   };
 

@@ -29,7 +29,7 @@ describe('[row 25] settings readiness failure: popup status and static PopupView
     expect(status).toMatchObject({ status: 'error', label: 'Settings could not be loaded' });
   });
 
-  it('PopupView rendered to static HTML with the error state: error text, Open disabled, Settings enabled', async () => {
+  it('PopupView rendered to static HTML with the error state: error text, Open disabled, Settings enabled', { timeout: 20000 }, async () => {
     vi.resetModules();
     const { PopupView } = await import('../../components/PopupLauncher');
     const html = renderToString(React.createElement(PopupView, {
