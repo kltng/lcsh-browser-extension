@@ -78,6 +78,22 @@ export const effectiveChoicesKey = (state) => [
 ].join('|');
 
 /**
+ * SPEC-P5 §7 + HOUSE_RULES 14: a change of the EFFECTIVE choices invalidates
+ * the name-key operation of the old choices IN THE SAME TRANSITION, whether or
+ * not a replacement operation starts afterwards. (Review-4 finding 1: before,
+ * the old operation was invalidated only as a side effect of starting a new
+ * one, so with no new target it stayed `pending` for ever and "Retry name MARC
+ * keys" stayed disabled.) Resolved keys and recorded reasons are per run, by
+ * cid, and are kept.
+ * @param {object} before - The state before the transition
+ * @param {object} after - The state after it
+ * @returns {object}
+ */
+const settleNameKeysOnChoiceChange = (before, after) => (
+  effectiveChoicesKey(before) === effectiveChoicesKey(after) ? after : invalidateNameKeys(after)
+);
+
+/**
  * Start a NEW run with Suggest: clears lookup, selection and recommendations.
  * @param {object} state - Run state (only its revisions are carried on)
  * @param {{runId:string, snapshot:{providerId:string, model:string}, input:object}} args - New run id, provenance snapshot, input copy
@@ -236,7 +252,8 @@ export const beginSelect = (state, snapshot) => {
     run: { ...state.run, stage: 'selecting', snapshots: { ...state.run.snapshots, select: snapshot } },
     select: { ...emptySelect(), manual: state.select.manual, revision, pending: true, deps }
   };
-  return { state: refresh(next), token: { runId: state.run.runId, revision } };
+  // Clearing the AI choices changes the effective choices.
+  return { state: settleNameKeysOnChoiceChange(state, refresh(next)), token: { runId: state.run.runId, revision } };
 };
 
 const isCurrentSelect = (state, token) => isCurrentRun(state, token)
@@ -273,12 +290,12 @@ export const commitSelect = (state, token, result) => {
   if (!isCurrentSelect(state, token)) return state;
   const choices = Object.fromEntries(Object.entries(result.choices || {}).filter(([id]) => listUnchanged(state, id)));
   const additional = (result.additional || []).filter((a) => !a.suggestionId || listUnchanged(state, a.suggestionId));
-  return refresh(withStage({
+  return settleNameKeysOnChoiceChange(state, refresh(withStage({
     ...state,
     select: {
       ...state.select, pending: false, mode: result.mode, choices, additional, error: null, fallbackKind: result.fallbackKind || null
     }
-  }, 'selected'));
+  }, 'selected')));
 };
 
 /**
@@ -308,13 +325,13 @@ export const invalidateSelect = (state) => {
  * @param {object} state - Run state
  * @returns {object}
  */
-export const continueWithoutAi = (state) => refresh(withStage({
+export const continueWithoutAi = (state) => settleNameKeysOnChoiceChange(state, refresh(withStage({
   ...state,
   select: {
     ...state.select, pending: false, mode: 'exact-fallback', error: null, additional: [], fallbackKind: 'user',
     choices: exactOnlyChoices(state.suggest?.suggestions || [], state.lookup.results)
   }
-}, 'selected'));
+}, 'selected')));
 
 /**
  * A manual choice ("Use this heading" = cid, "Use none" = null). Only a
@@ -328,7 +345,10 @@ export const setManualChoice = (state, suggestionId, cid) => {
   const candidates = state.lookup.results[suggestionId]?.candidates || [];
   if (candidates.length === 0) return state;
   if (cid !== null && !candidates.some((c) => c.cid === cid)) return state;
-  return refresh({ ...state, select: { ...state.select, manual: { ...state.select.manual, [suggestionId]: { cid } } } });
+  return settleNameKeysOnChoiceChange(
+    state,
+    refresh({ ...state, select: { ...state.select, manual: { ...state.select.manual, [suggestionId]: { cid } } } })
+  );
 };
 
 /**

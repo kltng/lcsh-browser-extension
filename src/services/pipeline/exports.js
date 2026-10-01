@@ -14,7 +14,23 @@ export const CSV_COLUMNS = ['label', 'lc_id', 'uri', 'authority', 'marc_field', 
  * @param {object} rec - Recommendation
  * @returns {string}
  */
-export const marcTextOf = (rec) => (rec.marc.status === 'from-authority' ? rec.marc.text : `MARC not available (${rec.marc.reason})`);
+export const marcTextOf = (rec) => (rec.marc.status === 'from-authority' ? rec.marc.text : marcUnavailableText(rec.marc.reason));
+
+const UNAVAILABLE = 'MARC not available';
+
+/**
+ * The "MARC not available" line of a reason. Most reasons are explained in
+ * brackets ("MARC not available (no key)"); a reason that is already a whole
+ * sentence starting with the same words (SPEC-P5 §7 "MARC not available
+ * offline") is shown as it is, so the words never appear twice. The stored
+ * reason value is not changed.
+ * @param {string|null} reason - The MARC reason
+ * @returns {string}
+ */
+export function marcUnavailableText(reason) {
+  if (typeof reason === 'string' && reason.startsWith(UNAVAILABLE)) return reason;
+  return `${UNAVAILABLE} (${reason})`;
+}
 
 /**
  * Copy all: a header line, then `label | LC ID | MARC text` per recommendation,

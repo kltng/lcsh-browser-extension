@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   buildHistoryEntry, rebuildV2, rebuildEntry, saveHistoryEntry, loadHistory, derivedBackend, runViewOf
 } from '../history';
-import { csvRows, recommendationsCsv, copyAllText, CSV_COLUMNS } from '../pipeline/exports';
+import { csvRows, recommendationsCsv, copyAllText, marcTextOf, CSV_COLUMNS } from '../pipeline/exports';
 import { ONLINE_PROVENANCE } from '../pipeline/types';
 import { selectionsOf } from '../pipeline/run';
 import { builtRun, RESULTS, C } from '../../../test/pipelineFixtures';
@@ -122,7 +122,27 @@ describe('[P5 row11] the CSV marc_reason column', () => {
 
   it('Copy all already prints the reason', () => {
     const rec = recOf({ status: 'unavailable', tag: null, ind1: null, ind2: null, subfields: [], text: null, reason: 'MARC not available offline' });
-    expect(copyAllText([rec], [])).toContain('Name | n1 | MARC not available (MARC not available offline)');
+    expect(copyAllText([rec], [])).toContain('Name | n1 | MARC not available offline');
+  });
+
+  // Live finding (lead): no "MARC not available (MARC not available offline)".
+  it('the export text says "MARC not available offline" exactly ONCE; other reasons keep the bracketed form; the stored reason is unchanged', () => {
+    const offline = recOf({ status: 'unavailable', tag: null, ind1: null, ind2: null, subfields: [], text: null, reason: 'MARC not available offline' });
+    expect(marcTextOf(offline)).toBe('MARC not available offline');
+    const copy = copyAllText([offline], []);
+    expect(copy.split('MARC not available').length - 1).toBe(1);
+    expect(copy).toContain('Name | n1 | MARC not available offline');
+    // CSV: the marc_reason column carries the stored reason, once.
+    const [, row] = csvRows([offline], []);
+    expect(row[CSV_COLUMNS.indexOf('marc_reason')]).toBe('MARC not available offline');
+    expect(row.join('|').split('MARC not available').length - 1).toBe(1);
+    // The record itself still holds the same reason value (saved history stays compatible).
+    expect(offline.marc.reason).toBe('MARC not available offline');
+
+    for (const reason of ['no key', 'Name MARC-key lookup failed', 'unsupported tag']) {
+      const other = recOf({ status: 'unavailable', tag: null, ind1: null, ind2: null, subfields: [], text: null, reason });
+      expect(marcTextOf(other)).toBe(`MARC not available (${reason})`);
+    }
   });
 
   it('the run\'s own recommendations export with their reasons', () => {

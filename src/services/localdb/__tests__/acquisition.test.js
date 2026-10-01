@@ -172,6 +172,63 @@ describe('[P5 row13] contention is retried, each time in a FRESH guarded worker 
     client.dispose();
   });
 
+  // Review-4 finding 2: the deadline was checked only BEFORE the backoff sleep.
+  // A continuation that resumes late (page scheduling) then spawned another
+  // worker outside the 30 s window — which could even acquire and recover.
+  it('a backoff that OVERSLEEPS past the deadline spawns no further worker and ends as db_busy', async () => {
+    let clock = 0;
+    const created = [];
+    const waits = [];
+    // The pool is free again from 31 s on: a worker started that late WOULD acquire.
+    const createWorker = () => {
+      const listeners = new Set();
+      const worker = {
+        sent: [],
+        terminated: false,
+        startedAt: clock,
+        addEventListener: (type, fn) => { if (type === 'message') listeners.add(fn); },
+        postMessage: (m) => {
+          worker.sent.push(m);
+          if (m.type !== 'rpc') return;
+          const reply = (payload) => queueMicrotask(() => listeners.forEach((fn) => fn({ data: { type: 'rpc-result', id: m.id, ...payload } })));
+          if (m.op === 'acquire') reply(clock >= 31000 ? { ok: true, result: { acquired: true } } : { ok: false, error: { kind: 'db_contention' } });
+          if (m.op === 'recover') reply({ ok: true, result: { state: 'ready', record: RECORD } });
+        },
+        terminate: () => { worker.terminated = true; }
+      };
+      created.push(worker);
+      return worker;
+    };
+    const client = createLocalDbClient({
+      createWorker,
+      now: () => clock,
+      // Normally the sleep lasts what was asked. The 2 s backoff that starts at
+      // 27.75 s resumes only at 31 s, past the 30 s deadline.
+      sleep: async (ms) => {
+        waits.push({ at: clock, ms });
+        clock = clock === 27750 ? 31000 : clock + ms;
+        await sleepReal(0);
+      },
+      hangMs: 100000,
+      probeMs: 100000
+    });
+    expect(await client.start()).toBe('db_busy');
+
+    // The scenario really happened: a 2 s wait began at 27.75 s.
+    expect(waits.at(-1)).toEqual({ at: 27750, ms: 2000 });
+    // No worker was started after the deadline...
+    expect(created.every((w) => w.startedAt < ACQUIRE_BUDGET_MS)).toBe(true);
+    expect(created).toHaveLength(waits.length);
+    // ...so nothing acquired, nothing recovered, nothing was cleaned up.
+    for (const worker of created) {
+      expect(worker.sent.filter((m) => m.op === 'acquire')).toHaveLength(1);
+      expect(worker.sent.some((m) => m.op === 'recover')).toBe(false);
+      expect(worker.terminated).toBe(true);
+    }
+    expect(client.state()).toBe('db_busy');
+    client.dispose();
+  });
+
   it('a non-contention failure is NOT retried', async () => {
     const created = [];
     const client = createLocalDbClient({

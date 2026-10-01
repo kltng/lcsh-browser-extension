@@ -137,9 +137,29 @@ describe('[P5 row12] the Recommendations step with a local name', () => {
     const offline = rec({ status: 'unavailable', tag: null, ind1: null, ind2: null, subfields: [], text: null, reason: 'MARC not available offline' });
     const html = renderHtml(RecommendationsPanel, { recommendations: [offline], selections: [], suggestions: LOCAL_SUGGESTIONS });
     const text = expectHonest(html, { ids: new Set(['n79091264']), links: new Set([lcLink(offline.uri)]) });
-    expect(text).toContain('MARC not available (MARC not available offline)');
+    expect(text).toContain('MARC not available offline');
     expect(text).not.toContain('MARC record');
     expect(hasUnresolvedNameKeys([offline])).toBe(true);
+  });
+
+  // Live finding (lead): the §7 reason already starts with "MARC not
+  // available", so the card read "MARC not available (MARC not available offline)".
+  it('the card shows "MARC not available offline" exactly ONCE; other reasons keep the bracketed form', () => {
+    const unavailable = (reason) => ({ status: 'unavailable', tag: null, ind1: null, ind2: null, subfields: [], text: null, reason });
+    const offline = renderHtml(RecommendationsPanel, {
+      recommendations: [rec(unavailable('MARC not available offline'))], selections: [], suggestions: LOCAL_SUGGESTIONS
+    });
+    const text = textOf(offline);
+    expect(text.split('MARC not available').length - 1).toBe(1);
+    expect(text).toContain('MARC not available offline');
+    expect(text).not.toContain('MARC not available (MARC not available offline)');
+
+    for (const reason of ['no key', 'Name MARC-key lookup failed', 'No matching name returned by this search', 'key does not match label']) {
+      const other = textOf(renderHtml(RecommendationsPanel, {
+        recommendations: [rec(unavailable(reason))], selections: [], suggestions: LOCAL_SUGGESTIONS
+      }));
+      expect(other, reason).toContain(`MARC not available (${reason})`);
+    }
   });
 
   it('a resolved key is shown as a MARC field built from the authority key', () => {

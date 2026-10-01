@@ -74,6 +74,12 @@ export const createWorkflow = ({
   const set = (next) => {
     if (next === state) return;
     state = next;
+    // The name-key controller FOLLOWS the state: once the operation it belongs
+    // to is no longer the current revision — invalidated by a new run, a
+    // lookup retry, a changed choice or disposal — its requests are aborted,
+    // whether or not a replacement operation starts (SPEC-P5 §7).
+    const running = controllers.nameKeys;
+    if (running && running.revision !== state.nameKeys.revision) running.controller.abort();
     listeners.forEach((listener) => listener(state));
   };
   const update = (fn) => set(fn(state));
@@ -81,7 +87,7 @@ export const createWorkflow = ({
   const abortSuggest = () => controllers.suggest?.abort();
   const abortLookups = () => controllers.lookup.forEach((c) => c.abort());
   const abortSelect = () => controllers.select?.abort();
-  const abortNameKeys = () => controllers.nameKeys?.abort();
+  const abortNameKeys = () => controllers.nameKeys?.controller.abort();
 
   /**
    * The name-key operation of ONE recommendations build (SPEC-P5 §7). Its
@@ -96,7 +102,7 @@ export const createWorkflow = ({
     set(begun.state);
     if (begun.targets.length === 0) return;
     const controller = new AbortController();
-    controllers.nameKeys = controller;
+    controllers.nameKeys = { controller, revision: begun.token.revision };
     try {
       // The run's validated-response cache, so a key already fetched in this
       // run is not fetched again (§7).
@@ -112,13 +118,16 @@ export const createWorkflow = ({
       logWorkflowError('Error resolving name MARC keys:', err);
       update(invalidateNameKeys);
     } finally {
-      if (controllers.nameKeys === controller) controllers.nameKeys = null;
+      if (controllers.nameKeys?.controller === controller) controllers.nameKeys = null;
     }
   };
 
   // A newly chosen name with no key and no recorded reason starts an operation.
   const maybeResolveNames = () => {
     if (state.recommendations === null) return;
+    // A PENDING operation is always the current one (any change of its inputs
+    // invalidates it and clears `pending`), so it already covers these choices.
+    if (state.nameKeys.pending) return;
     const open = nameKeyTargets(state.recommendations)
       .filter((t) => !Object.hasOwn(state.nameKeys.reasons, t.cid) && !Object.hasOwn(state.nameKeys.keys, t.cid));
     if (open.length > 0) resolveNames();
@@ -253,7 +262,10 @@ export const createWorkflow = ({
       maybeResolveNames();
     },
     choose: (suggestionId, cid) => {
-      abortNameKeys();
+      // A CHANGED effective choice invalidates the running name-key operation
+      // inside setManualChoice(), and set() then aborts its requests. A choice
+      // that changes nothing (e.g. not a candidate of this suggestion) leaves
+      // the operation alone.
       update((s) => setManualChoice(s, suggestionId, cid));
       maybeResolveNames();
     },

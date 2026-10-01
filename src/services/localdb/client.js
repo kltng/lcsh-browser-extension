@@ -311,6 +311,11 @@ export const createLocalDbClient = ({
   async function acquireInFreshWorkers(myEpoch) {
     const deadline = now() + acquireBudgetMs;
     for (let attempt = 0; ; attempt += 1) {
+      // The deadline is checked again right before EVERY spawn: a backoff
+      // sleep can resume late (page scheduling), and no worker may start an
+      // acquisition outside the window. Expiry is the same `db_busy` — no
+      // recovery, no cleanup. The first attempt always runs.
+      if (attempt > 0 && now() >= deadline) return 'busy';
       const myGeneration = spawn();
       // Initialization stays monitored — but by a watchdog that outlasts the
       // whole acquisition window, so the two can never race (§3.2 rule 3).
@@ -336,6 +341,8 @@ export const createLocalDbClient = ({
         if (now() + wait >= deadline) return 'busy';
         await sleep(wait);
         if (epoch !== myEpoch) return 'stale';
+        // Review-4 finding 2: recheck AFTER the sleep, not only before it.
+        if (now() >= deadline) return 'busy';
       }
     }
   }

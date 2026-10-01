@@ -7,7 +7,7 @@ import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import { useAppContext } from '../context/AppContext';
 import { selectionsOf } from '../services/pipeline/run';
 import { subdivisionNote } from '../services/pipeline/select';
-import { copyAllText, recommendationsCsv } from '../services/pipeline/exports';
+import { copyAllText, recommendationsCsv, marcUnavailableText } from '../services/pipeline/exports';
 import { NONE_REASON_WORDS } from '../services/pipeline/types';
 import { needsNameKey } from '../services/pipeline/nameKeys';
 import { methodText, authorityLabel, lcLink, viaNote } from './pipelineText';
@@ -65,7 +65,7 @@ export const RecommendationsPanel = ({ recommendations, selections, suggestions,
                 </Box>
               ) : (
                 <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                  MARC not available ({rec.marc.reason})
+                  {marcUnavailableText(rec.marc.reason)}
                 </Typography>
               )}
               {note && <Alert severity="info" sx={{ mt: 1 }}>{note}</Alert>}

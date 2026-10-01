@@ -4,8 +4,9 @@ import { renderToString } from 'react-dom/server';
 import { createWorkflow } from '../workflow';
 import { resolveNameKeys } from '../nameKeys';
 import { createScheduler, createRunCache } from '../../lookup/scheduler';
-import { AppProvider, useAppContext, STEP_OPERATIONS } from '../../../context/AppContext';
+import AppContext, { AppProvider, useAppContext, STEP_OPERATIONS } from '../../../context/AppContext';
 import { buildAndShowRecommendations } from '../../../components/ScrapedResults';
+import FinalRecommendations, { hasUnresolvedNameKeys } from '../../../components/FinalRecommendations';
 import { KEY } from '../../../../test/fixtures';
 import { response } from '../../../../test/setup';
 import { hit, mockLoc } from '../../../../test/locFixtures';
@@ -48,17 +49,27 @@ const SUGGESTED = answer({
   ]
 });
 
+/** The default candidate lists per suggestion. */
+const DEFAULT_CANDIDATES = { s1: [KURO, MIFUNE], s2: [MIFUNE] };
+
 /** The local backend of an installed FULL database: names come back with no MARC key. */
-const localBackend = () => ({
+const localBackend = (candidates = DEFAULT_CANDIDATES) => ({
   id: 'local-db',
   cache: createRunCache(),
   lookup: async (s) => ({
     suggestionId: s.id,
-    candidates: s.id === 's1' ? [KURO, MIFUNE] : [MIFUNE],
+    candidates: candidates[s.id] || [],
     failures: [], incomplete: false, rejectedHits: 0, requests: [],
     provenance: PROVENANCE, replacementNotes: []
   })
 });
+
+/** An AI selection answer: `choices` maps suggestion id → presented id or 'none'. */
+const selection = (choices) => answer({
+  selections: Object.entries(choices).map(([suggestionId, choice]) => ({ suggestionId, choice, confidence: 90 })),
+  additional: []
+});
+const isSelectRequest = (req) => JSON.stringify(req?.schema || {}).includes('selections');
 
 const waitFor = async (predicate, ms = 2500) => {
   const until = Date.now() + ms;
@@ -74,13 +85,17 @@ const waitFor = async (predicate, ms = 2500) => {
  * a local lookup, and manual choices. `calls` records every name-key
  * operation's signal; the REAL resolver does the work.
  */
-const readyToBuild = async ({ choose = [['s1', KURO.cid], ['s2', MIFUNE.cid]] } = {}) => {
+const readyToBuild = async ({
+  choose = [['s1', KURO.cid], ['s2', MIFUNE.cid]], candidates = DEFAULT_CANDIDATES, selectAnswers = []
+} = {}) => {
   const calls = [];
   let n = 0;
+  const queue = [...selectAnswers];
   const wf = createWorkflow({
     loadConfig: async () => ({ cfg: CFG, settings: { lookupBackend: 'local-db' } }),
-    generateImpl: vi.fn(async () => SUGGESTED),
-    createBackend: () => localBackend(),
+    // The suggest call gets SUGGESTED; each AI selection call takes the next answer.
+    generateImpl: vi.fn(async (cfg, req) => (isSelectRequest(req) ? queue.shift() : SUGGESTED)),
+    createBackend: () => localBackend(candidates),
     scheduler: createScheduler({ spacingMs: 0, maxInFlight: 8 }),
     uuid: () => `run-${++n}`,
     resolveNameKeysImpl: (args) => {
@@ -252,5 +267,158 @@ describe('[P5 fix4] the §7 abort cases still abort and invalidate', () => {
     expect(selectSignal.aborted).toBe(true);
     expect(wf.getState().select.pending).toBe(false);
     await selecting;
+  });
+});
+
+/**
+ * Review-4 finding 1: a changed EFFECTIVE choice must abort AND invalidate the
+ * name-key operation whether or not a replacement operation starts. Before,
+ * the old operation was invalidated only as a side effect of starting a new
+ * one; with no new target it stayed `pending` for ever, and "Retry name MARC
+ * keys" stayed disabled.
+ */
+describe('[P5 fix5] a changed choice always settles the old name-key operation', () => {
+  /** The Recommendations step as the user sees it. */
+  const retryButton = (wf) => {
+    const html = renderToString(React.createElement(
+      AppContext.Provider,
+      { value: { run: wf.getState(), workflow: wf, setActiveStep: vi.fn(), saveRunToHistory: vi.fn() } },
+      React.createElement(FinalRecommendations)
+    ));
+    const label = html.indexOf('Retry name MARC keys');
+    if (label < 0) return null;
+    // Exactly this button: from its own opening tag up to its label.
+    return html.slice(html.lastIndexOf('<button', label), label);
+  };
+
+  // (a)
+  it('A changed to "Use none" while B has a recorded failure: not pending, B offered, Retry enabled and working', async () => {
+    let mifuneFails = true;
+    let releaseKuro;
+    const kuroHeld = new Promise((resolve) => { releaseKuro = resolve; });
+    const loc = mockLoc({
+      [KURO_KEY]: async () => { await kuroHeld; return response({ hits: [KURO_HIT] }); },
+      [MIFUNE_KEY]: async () => (mifuneFails ? response('', { status: 500 }) : response({ hits: [MIFUNE_HIT] }))
+    });
+    // B is chosen and built first; its key lookup FAILS and the reason is recorded.
+    const { wf, calls } = await readyToBuild({ choose: [['s2', MIFUNE.cid]] });
+    wf.build();
+    expect(await waitFor(() => !wf.getState().nameKeys.pending)).toBe(true);
+    expect(wf.getState().nameKeys.reasons[MIFUNE.cid]).toBe('Name MARC-key lookup failed');
+
+    // Back on Matches, A is chosen: an operation for A alone starts (B's
+    // recorded reason keeps it out of ordinary regeneration).
+    wf.choose('s1', KURO.cid);
+    expect(await waitFor(() => loc.keys().includes(KURO_KEY))).toBe(true);
+    const forA = calls.at(-1);
+    expect(forA.targets.map((t) => t.cid)).toEqual([KURO.cid]);
+    expect(wf.getState().nameKeys.pending).toBe(true);
+
+    // The user changes A to "Use none": NO replacement operation can start.
+    wf.choose('s1', null);
+    expect(forA.signal.aborted).toBe(true);
+    expect(wf.getState().nameKeys.pending).toBe(false);
+    // The cancelled answer arriving later changes nothing.
+    releaseKuro();
+    await new Promise((resolve) => { setTimeout(resolve, 20); });
+    expect(wf.getState().nameKeys.pending).toBe(false);
+    expect(wf.getState().nameKeys.keys[KURO.cid]).toBeUndefined();
+
+    // B is still offered, and the Retry button is ENABLED.
+    expect(wf.getState().recommendations.map((r) => r.cid)).toEqual([MIFUNE.cid]);
+    expect(hasUnresolvedNameKeys(wf.getState().recommendations)).toBe(true);
+    const button = retryButton(wf);
+    expect(button).not.toBeNull();
+    expect(button).not.toContain('disabled');
+
+    // ...and Retry works.
+    mifuneFails = false;
+    wf.retryNameKeys();
+    expect(await waitFor(() => wf.getState().recommendations[0].marc.status === 'from-authority')).toBe(true);
+    expect(marcTexts(wf)).toEqual([MIFUNE_MARC]);
+    expect(wf.getState().nameKeys.pending).toBe(false);
+  });
+
+  // (b) — an AI selection
+  it('an AI selection that leaves NO new targets aborts the old operation and leaves it not pending', async () => {
+    const { loc, release } = (() => {
+      let open;
+      const held = new Promise((resolve) => { open = resolve; });
+      return {
+        loc: mockLoc({ [KURO_KEY]: async () => { await held; return response({ hits: [KURO_HIT] }); } }),
+        release: open
+      };
+    })();
+    // The AI first chooses Kurosawa (s1c1), then — re-run — none at all.
+    const { wf, calls } = await readyToBuild({
+      choose: [], candidates: { s1: [KURO] }, selectAnswers: [selection({ s1: 's1c1' }), selection({ s1: 'none' })]
+    });
+    await wf.select();
+    wf.build();
+    expect(await waitFor(() => loc.keys().includes(KURO_KEY))).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(wf.getState().nameKeys.pending).toBe(true);
+
+    await wf.select();
+    expect(calls[0].signal.aborted).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(wf.getState().nameKeys.pending).toBe(false);
+    release();
+    await new Promise((resolve) => { setTimeout(resolve, 20); });
+    expect(wf.getState().nameKeys.pending).toBe(false);
+    expect(wf.getState().recommendations).toEqual([]);
+  });
+
+  // (b) — the exact-only fallback
+  it('continue-without-AI that leaves NO new targets aborts the old operation and leaves it not pending', async () => {
+    let release;
+    const held = new Promise((resolve) => { release = resolve; });
+    const loc = mockLoc({ [KURO_KEY]: async () => { await held; return response({ hits: [KURO_HIT] }); } });
+    // Two exact-full names for s1: the exact-only fallback chooses neither.
+    const { wf, calls } = await readyToBuild({
+      choose: [], candidates: { s1: [KURO, MIFUNE] }, selectAnswers: [selection({ s1: 's1c1' })]
+    });
+    await wf.select();
+    wf.build();
+    expect(await waitFor(() => loc.keys().includes(KURO_KEY))).toBe(true);
+    expect(wf.getState().nameKeys.pending).toBe(true);
+
+    wf.continueWithoutAi();
+    expect(calls[0].signal.aborted).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(wf.getState().nameKeys.pending).toBe(false);
+    release();
+    await new Promise((resolve) => { setTimeout(resolve, 20); });
+    expect(wf.getState().nameKeys.pending).toBe(false);
+  });
+
+  it('a choice that does NOT change the effective choices leaves the running operation alone', async () => {
+    let release;
+    const held = new Promise((resolve) => { release = resolve; });
+    mockLoc({ [KURO_KEY]: async () => { await held; return response({ hits: [KURO_HIT] }); } });
+    const { wf, calls } = await readyToBuild({ choose: [['s1', KURO.cid]] });
+    wf.build();
+    expect(await waitFor(() => calls.length === 1)).toBe(true);
+    // A cid that is not a candidate of s1 is ignored: nothing changed.
+    wf.choose('s1', 'lcsh:sh0000');
+    expect(calls[0].signal.aborted).toBe(false);
+    expect(wf.getState().nameKeys.pending).toBe(true);
+    release();
+    expect(await waitFor(() => !wf.getState().nameKeys.pending)).toBe(true);
+    expect(marcTexts(wf)).toEqual([KURO_MARC]);
+  });
+
+  it('already resolved keys stay reused after a choice change', async () => {
+    const loc = mockLoc({ [KURO_KEY]: [KURO_HIT], [MIFUNE_KEY]: [MIFUNE_HIT] });
+    const { wf } = await readyToBuild({ choose: [['s1', KURO.cid]] });
+    wf.build();
+    expect(await waitFor(() => !wf.getState().nameKeys.pending)).toBe(true);
+    expect(wf.getState().nameKeys.keys[KURO.cid]).toBeTruthy();
+    // Kurosawa is dropped and chosen again: no second request for it.
+    wf.choose('s1', null);
+    wf.choose('s1', KURO.cid);
+    expect(wf.getState().nameKeys.pending).toBe(false);
+    expect(marcTexts(wf)).toEqual([KURO_MARC]);
+    expect(loc.keys().filter((k) => k === KURO_KEY)).toHaveLength(1);
   });
 });
