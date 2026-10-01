@@ -1,6 +1,6 @@
 # SPEC-P5 — Local LCSH database in the extension
 
-Status: v2.2, 2026-09-27 (round 2 §17; round 3 §18). Dispatch-ready. v1 was REJECTED (14 findings, 4 HIGH;
+Status: v2.3, 2026-10-01 (round 2 §17; round 3 §18; live findings §19). v1 was REJECTED (14 findings, 4 HIGH;
 `.dispatch/spec-review-p5-1/last_message.md`; v1 archived at
 `.dispatch/SPEC-P5.v1.md`). §16 maps each finding to its fix. Builds on
 SPEC-P4 (lookup step, Candidate, honesty rule) and the builder contract
@@ -110,10 +110,21 @@ The SAH-pool VFS needs exclusive access, even for read-only use.
   result}` / `{id, ok: false, error: {kind, message}}`; progress events.
   Ops: `status`, `query` (a named query from `sql.js` + bound parameters;
   never raw SQL), `install`, `cancel`, `uninstall`.
-- Worker crash (`error`/`messageerror`, or no `status` answer within 10 s):
-  pending RPCs reject with `db_worker_failed`; the client terminates the
-  worker and creates one new worker while still holding the lock. A second
-  crash in one document life → this tab uses `loc-api`, with a notice.
+- Worker crash (`error`/`messageerror`, or a HANG): pending RPCs reject with
+  `db_worker_failed`; the client terminates the worker and creates one new
+  worker while still holding the lock. A second crash in one document life →
+  this tab uses `loc-api`, with a notice.
+- **Hang = no answer to a `status` probe AND no progress event for 30 s.** A
+  worker that is still emitting progress events is alive even if a probe
+  answer is late; without a running mutation the 30 s apply to probes alone.
+- **Replacement must survive the pool's exclusivity.** A terminated worker's
+  SAH access handles are released by the browser only when the worker is
+  really gone, which can take a moment. The new worker therefore retries
+  `installOpfsSAHPoolVfs` when it fails with `NoModificationAllowedError`
+  (contention, `db_busy`), with backoff, for up to 30 s, before it reports a
+  failure. (Live finding 2026-10-01: an immediate replacement during the
+  `full` install failed with "Access Handles cannot be created if there is
+  another open one", then `removeVfs() failed with no recovery strategy`.)
 
 ### 3.3 Settings bridge
 
@@ -237,6 +248,15 @@ result is shown, not required).
    `undefined` at the end. The first chunk given to the importer is at least
    512 bytes (smaller leading chunks are coalesced).
 7. Progress events at most every 500 ms (compressed bytes / `gz_size`).
+7b. **The worker yields to its event loop (a macrotask, e.g.
+   `setTimeout(0)`) at least every 100 ms of work during the WHOLE install:
+   the download/decompress/import pull, the hashing, and the §4.5 step 3
+   read-back.** Reading buffered stream data resolves as microtasks and each
+   SAH write is synchronous, so without an explicit macrotask yield the worker
+   cannot answer `status` or `cancel` while data arrives faster than it is
+   written. (Live finding 2026-10-01: during the real `full` install the
+   worker stopped answering for > 2 s five times; the core install failed
+   once on the same cause.)
 8. No bytes for 60 s → abort (`network_stalled`).
 9. `cancel` before the `committing` state (§4.5 step 7): abort the fetch,
    stop at the next pull, then the common terminal rule (§4.8).
@@ -708,3 +728,13 @@ tiny fixtures test correctness only.
 | 2 | §8 Cancel disabled on entering `committing`; §4.8 scope excludes unresolved commits; §4.5 step 7 commit point = successful write |
 | 3 | §3.3 recovery `operationId`, locked `read`, page-owned update check |
 | 4 | §9 full provenance + notes in history, defaults for old entries, derived entry-level backend; §6.4 null `releaseCommit` online; builder ref v3.5 |
+
+## 19. Live findings (§13, 2026-10-01) → v2.3
+
+Against the real release `2026.10.01.1`, fresh profile, production package:
+core installed once in 11 s (download 7 s, stored-byte check 213 MB in 4 s)
+and failed once ("stopped responding" after 59 s); `full` failed at 157 s
+after writing 4.7 GB. Recovery after the failure removed the 4.98 GB
+leftover completely on the next page open. Fixes: §4.4 step 7b (yield during
+the whole install), §3.2 hang definition (progress counts as liveness, 30 s),
+§3.2 replacement retry on pool contention.
