@@ -1,6 +1,6 @@
 # SPEC-P5 — Local LCSH database in the extension
 
-Status: v2.3, 2026-10-01 (round 2 §17; round 3 §18; live findings §19). v1 was REJECTED (14 findings, 4 HIGH;
+Status: v2.4, 2026-10-01 (round 2 §17; round 3 §18; live findings §19; reviewer edits to them §20). v1 was REJECTED (14 findings, 4 HIGH;
 `.dispatch/spec-review-p5-1/last_message.md`; v1 archived at
 `.dispatch/SPEC-P5.v1.md`). §16 maps each finding to its fix. Builds on
 SPEC-P4 (lookup step, Candidate, honesty rule) and the builder contract
@@ -117,14 +117,40 @@ The SAH-pool VFS needs exclusive access, even for read-only use.
 - **Hang = no answer to a `status` probe AND no progress event for 30 s.** A
   worker that is still emitting progress events is alive even if a probe
   answer is late; without a running mutation the 30 s apply to probes alone.
-- **Replacement must survive the pool's exclusivity.** A terminated worker's
-  SAH access handles are released by the browser only when the worker is
-  really gone, which can take a moment. The new worker therefore retries
-  `installOpfsSAHPoolVfs` when it fails with `NoModificationAllowedError`
-  (contention, `db_busy`), with backoff, for up to 30 s, before it reports a
-  failure. (Live finding 2026-10-01: an immediate replacement during the
-  `full` install failed with "Access Handles cannot be created if there is
-  another open one", then `removeVfs() failed with no recovery strategy`.)
+- **Pool acquisition is NON-DESTRUCTIVE (data-loss guard).** In the pinned
+  `@sqlite.org/sqlite-wasm` 3.53.4, ANY failure of `installOpfsSAHPoolVfs`
+  after the pool directory is opened runs `removeVfs()`, which recursively
+  deletes the pool directory — the installed database (dist/index.mjs
+  ~16951 → ~16449; the library documents `removeVfs` as "intended primarily
+  for testing"). Contention (another worker still holding the access
+  handles) is such a failure. Rules:
+  1. Before the worker installs the pool, it installs a guard for its whole
+     life: `FileSystemDirectoryHandle.prototype.removeEntry` REFUSES any call
+     with `{recursive: true}` (throws; the library's cleanup swallows the
+     error, so the init failure still propagates, and nothing is deleted).
+     Justification: in the pinned package the only recursive removals are
+     `removeVfs()` and the `opfs`-VFS `rmfr` helpers, which this extension
+     does not use; this extension's own code never removes a directory.
+     Non-recursive `removeEntry` (slot files) is untouched.
+  2. Retry ONLY `NoModificationAllowedError` (contention), with backoff, for
+     up to 30 s. Each retry is a FRESH acquisition
+     (`forceReinitIfPreviouslyFailed: true`), never a cached rejection.
+     Every failed attempt settles and releases whatever it acquired before
+     the next one. Exhaustion reports `db_busy`, preserving files and
+     settings.
+  3. The acquisition retry budget starts with acquisition, AFTER the §3.3
+     drain, and never bounds or bypasses that drain. Startup monitoring
+     allows the full acquisition window without racing an equal-duration
+     watchdog; initialization stays monitored. Recovery and local queries
+     begin only after a successful acquisition. Retry expiry never triggers
+     staging cleanup for an unresolved commit. Only progress from the
+     CURRENT worker generation and running operation refreshes liveness.
+  (Live finding 2026-10-01: an immediate replacement during the `full`
+  install failed with "Access Handles cannot be created if there is another
+  open one", then `removeVfs() failed with no recovery strategy` — the
+  deletion failed only because the old worker still held the handles. This
+  hazard exists in the code committed at fbb626c, independent of retries;
+  rule 1 closes it.)
 
 ### 3.3 Settings bridge
 
@@ -248,10 +274,17 @@ result is shown, not required).
    `undefined` at the end. The first chunk given to the importer is at least
    512 bytes (smaller leading chunks are coalesced).
 7. Progress events at most every 500 ms (compressed bytes / `gz_size`).
-7b. **The worker yields to its event loop (a macrotask, e.g.
-   `setTimeout(0)`) at least every 100 ms of work during the WHOLE install:
-   the download/decompress/import pull, the hashing, and the §4.5 step 3
-   read-back.** Reading buffered stream data resolves as microtasks and each
+7b. **Across the whole install (download/decompress/import pull, hashing,
+   and the §4.5 step 3 read-back), check a shared monotonic work budget
+   between bounded work units and await a MACROTASK when 100 ms has elapsed
+   since the last yield.** Bound hash, write and read units; one synchronous
+   browser operation or a scheduling delay may exceed this budget. A resolved
+   Promise is not a yield. Preserve stream backpressure and bounded
+   buffering; do not prefetch the database or launch unawaited work. Recheck
+   cancellation after every yield and before returning another import chunk
+   or entering `committing`. Cancellation latency includes the current
+   synchronous work unit and event-loop scheduling; cleanup completion has no
+   100 ms guarantee. Reading buffered stream data resolves as microtasks and each
    SAH write is synchronous, so without an explicit macrotask yield the worker
    cannot answer `status` or `cancel` while data arrives faster than it is
    written. (Live finding 2026-10-01: during the real `full` install the
@@ -288,7 +321,8 @@ result is shown, not required).
      changes nothing.
    - Between read batches the worker yields to its event loop and handles
      `cancel` and `status` there; it reports a separate "Verifying" phase
-     with progress. A healthy batch never trips the 10 s worker watchdog.
+     with progress. Verification follows §3.2 liveness monitoring and §4.4
+     step 7b yielding.
      Cost: one extra read + hash of `db_size` bytes (5.4 GB for `full`);
      its browser time is measured in §13, not estimated.
 4. Any failure in steps 1–3 → the common terminal rule (§4.8) with "The
@@ -638,6 +672,18 @@ to them.
 12. Honesty (`react-dom/server`): Matches/Recommendations with `local-db`
    and mixed candidates; IDs/links only from rows; variant/replacement
    wording.
+13. Live-findings tests (v2.4): immediately resolved buffered pulls with
+   synchronous fake writes and hashing, an injected monotonic clock and a
+   controllable macrotask scheduler — assert budget-triggered yields across
+   import AND verification, and that status/cancel are served before
+   completion; progress-aware watchdog expiry and stale-progress rejection
+   (an old generation's progress does not count); contention retries through
+   the 30 s deadline with a fresh acquisition each time; drain-before-
+   recovery ordering; **the removeEntry guard: a recursive removal is
+   refused, a non-recursive one passes, and an init failure under contention
+   leaves every pool file in place** (fake FileSystem handles). Chrome
+   acceptance (§13) measures the real responsiveness.
+
 Query-plan assertions stay in the builder's representative-data gate; the
 tiny fixtures test correctness only.
 
@@ -738,3 +784,13 @@ after writing 4.7 GB. Recovery after the failure removed the 4.98 GB
 leftover completely on the next page open. Fixes: §4.4 step 7b (yield during
 the whole install), §3.2 hang definition (progress counts as liveness, 30 s),
 §3.2 replacement retry on pool contention.
+
+## 20. Review of the live-findings amendment → v2.4
+
+APPROVE-WITH-CHANGES, one HIGH: retrying the pinned initializer is
+destructive (its failure cleanup recursively deletes the pool). §3.2 now
+specifies non-destructive acquisition (the recursive-removeEntry guard, fresh
+acquisitions, contention-only retries, `db_busy` on exhaustion), deadline
+ordering against the §3.3 drain and recovery, current-generation-only
+liveness; §4.4 step 7b a cooperative monotonic budget with backpressure and
+cancellation rechecks; §4.5 the stale 10 s sentence; §12 row 13 the tests.
