@@ -751,6 +751,15 @@ describe('[P5 fix7] every install/verify failure kind reaches the page with its 
     expect(known.message).not.toContain('WORKER-SUPPLIED');
   });
 
+  // Review-6 finding 3: only OWN keys of the message table are known kinds.
+  it('inherited property names are unknown kinds: "stopped responding"', async () => {
+    for (const kind of ['toString', 'constructor', '__proto__', 'hasOwnProperty', 'valueOf']) {
+      expect(new LocalDbError(kind), kind).toMatchObject({ kind: 'db_worker_failed', message: STOPPED });
+      const err = await failedInstall({ kind, message: WORKER_TEXT });
+      expect(err, kind).toMatchObject({ kind: 'db_worker_failed', message: STOPPED });
+    }
+  });
+
   it('real worker death keeps "stopped responding"', async () => {
     const { client, workers } = await startedClient();
     const running = client.install({ operationId: 'op1', pointer: {}, profile: 'core' });

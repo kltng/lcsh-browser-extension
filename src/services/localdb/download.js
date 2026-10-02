@@ -129,6 +129,15 @@ export const streamDatabase = async ({
   // v2.7 §4.4 step 4: WHERE an error arose decides its kind, never its text.
   // This is set only when the HTTP response body itself fails.
   let bodyFailed = false;
+  // Review-6 findings 1 and 2: cleanup ownership of the response starts as
+  // soon as it exists. `source` is the reader of the ORIGINAL body;
+  // `bodyFinished` is true once that body ended, failed or was cancelled.
+  // `tearingDown` is raised before any cleanup, so nothing that cleanup
+  // causes (a rejected pending read) can change the classification.
+  let response = null;
+  let source = null;
+  let bodyFinished = false;
+  let tearingDown = false;
 
   const failure = (err, { afterDecoder = false } = {}) => {
     if (err instanceof InstallError) return err;
@@ -146,22 +155,53 @@ export const streamDatabase = async ({
    * buffers nothing and backpressure is unchanged.
    */
   const markedBody = (body) => {
-    const source = body.getReader();
+    source = body.getReader();
+    const own = source;
     return new ReadableStream({
       async pull(stream) {
         let step;
         try {
-          step = await source.read();
+          step = await own.read();
         } catch (err) {
+          bodyFinished = true;
+          if (tearingDown) return;
           bodyFailed = true;
           stream.error(err);
           return;
         }
+        if (step.done) bodyFinished = true;
+        if (tearingDown) return;
         if (step.done) stream.close();
         else stream.enqueue(step.value);
       },
-      cancel: (reason) => source.cancel(reason)
+      // Downstream cancellation (for example after a decoder error) reaches
+      // the body here. The lock itself is released in the `finally` below.
+      cancel: async (reason) => {
+        if (bodyFinished) return;
+        bodyFinished = true;
+        await own.cancel(reason).catch(() => {});
+      }
     }, { highWaterMark: 0 });
+  };
+
+  /** Cancel the original body if it is unfinished, then release its lock. */
+  const releaseBody = async () => {
+    if (source) {
+      if (!bodyFinished) {
+        bodyFinished = true;
+        await source.cancel().catch(() => {});
+      }
+      try {
+        source.releaseLock();
+      } catch (e) {
+        // Already released.
+      }
+      return;
+    }
+    // No reader was ever taken (non-200, or setup failed before it): cancel
+    // the unread body, which also ends the fetch.
+    const body = response?.body;
+    if (body && typeof body.cancel === 'function' && !body.locked) await body.cancel().catch(() => {});
   };
 
   try {
@@ -174,6 +214,8 @@ export const streamDatabase = async ({
     } catch (err) {
       throw failure(err);
     }
+    // From here on, every exit releases this response (finding 2).
+    response = res;
     if (res.status !== 200) throw new InstallError('network');
 
     const gzHash = createSha256();
@@ -227,8 +269,9 @@ export const streamDatabase = async ({
     if (gzHash.bytes() !== entry.gzSize || dbHash.bytes() !== entry.dbSize) throw new InstallError('damaged');
     if (gzHash.digest() !== entry.sha256Gz || dbHash.digest() !== entry.sha256Db) throw new InstallError('damaged');
   } finally {
-    // The reader and the fetch are released on success, failure AND cancel
-    // (HOUSE_RULES 12).
+    // The readers and the fetch are released on success, failure AND cancel
+    // (HOUSE_RULES 12). The classification above is already decided.
+    tearingDown = true;
     if (reader) {
       await reader.cancel().catch(() => {});
       try {
@@ -237,6 +280,7 @@ export const streamDatabase = async ({
         // Already released by cancel().
       }
     }
+    await releaseBody();
   }
 };
 

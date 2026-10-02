@@ -674,6 +674,161 @@ describe('[P5 row7] update, profile switch and the commit point', () => {
     expect([...env.pool.files.keys()]).toEqual([]);
   });
 
+  // Review-6 findings 1 and 2: the ORIGINAL response body is released (and
+  // cancelled when unfinished) on every terminal path (HOUSE_RULES 12).
+  describe('[P5 fix10] the response body is released on every exit', () => {
+    /**
+     * A response body that records whether it was cancelled. `stallAfter`
+     * stops delivering after that many chunks (the read stays pending);
+     * `errorAfter` makes the body itself fail after that many chunks.
+     */
+    const trackedBody = (bytes, { chunkSize = 64, stallAfter = Infinity, errorAfter = Infinity, onChunk } = {}) => {
+      const state = { cancelled: false, closed: false, chunks: 0, total: Math.ceil(bytes.length / chunkSize) };
+      let at = 0;
+      const body = new ReadableStream({
+        async pull(controller) {
+          if (state.chunks >= errorAfter) {
+            controller.error(new TypeError('connection reset'));
+            return;
+          }
+          if (state.chunks >= stallAfter) {
+            await new Promise(() => {});
+          }
+          if (at >= bytes.length) {
+            state.closed = true;
+            controller.close();
+            return;
+          }
+          const piece = bytes.slice(at, at + chunkSize);
+          at += piece.length;
+          state.chunks += 1;
+          if (onChunk) onChunk(state.chunks);
+          controller.enqueue(piece);
+        },
+        cancel() { state.cancelled = true; }
+      });
+      return { body, state };
+    };
+    // Incompressible bytes: a gzip body far larger than what the pipe reads
+    // ahead, so a failure really leaves it UNFINISHED.
+    const noise = (n) => {
+      const bytes = new Uint8Array(n);
+      let x = 12345;
+      for (let i = 0; i < n; i++) {
+        x = (Math.imul(x, 1103515245) + 12345) >>> 0;
+        bytes[i] = x >>> 24;
+      }
+      return bytes;
+    };
+    const BIG = noise(256 * 1024);
+    // Node's DecompressionStream reads its whole input ahead (a test-runtime
+    // property; Chrome applies backpressure). So the body delivers 8 KiB and
+    // then holds its next read open: it is UNFINISHED when the failure comes.
+    const HELD = { chunkSize: 1024, stallAfter: 8 };
+    const run = async ({
+      status = 200, gz, body: bodyOpts = {}, importDb, stallMs = 60000, cancelAt, bytes
+    } = {}) => {
+      const env = setup(bytes ? { bytes } : {});
+      if (importDb) env.pool.importDb = vi.fn(importDb);
+      let installer;
+      const tracked = trackedBody(gz ?? env.pointer.gz, {
+        ...bodyOpts,
+        onChunk: cancelAt ? (n) => { if (n === cancelAt) installer.cancel('op1'); } : undefined
+      });
+      installer = createInstaller({
+        pool: env.pool,
+        bridge: env.bridge,
+        fetchImpl: vi.fn(async () => ({ status, body: tracked.body })),
+        random: () => 'aaaaaaaa',
+        stallMs,
+        yieldToMacrotask: () => new Promise((resolve) => { setTimeout(resolve, 0); })
+      });
+      const outcome = await installer.install({ pointer: env.pointer, profile: PROFILE, operationId: 'op1' })
+        .then((value) => ({ value }), (error) => ({ error }));
+      // Let any cancellation that is still travelling up the pipe arrive.
+      await new Promise((resolve) => { setTimeout(resolve, 10); });
+      return { env, outcome, body: tracked.body, state: tracked.state };
+    };
+
+    it('success (EOF): installed, the body is unlocked and was not cancelled', async () => {
+      const { outcome, body, state } = await run();
+      expect(outcome.value).toMatchObject({ status: 'installed' });
+      expect(body.locked).toBe(false);
+      expect(state.cancelled).toBe(false);
+    });
+
+    it('a body error: network, the body is unlocked', async () => {
+      const { outcome, body, env } = await run({ body: { errorAfter: 2, chunkSize: 32 } });
+      expect(outcome.error).toMatchObject({ kind: 'network' });
+      expect(body.locked).toBe(false);
+      expect([...env.pool.files.keys()]).toEqual([]);
+    });
+
+    it('a user cancel: cancelled, the unfinished body is cancelled and unlocked', async () => {
+      const { outcome, body, state } = await run({ bytes: BIG, body: HELD, cancelAt: 3 });
+      expect(outcome.error).toMatchObject({ kind: 'cancelled' });
+      expect(state.closed).toBe(false);
+      expect(state.cancelled).toBe(true);
+      expect(body.locked).toBe(false);
+    });
+
+    it('a stall abort: network_stalled, the unfinished body is cancelled and unlocked', async () => {
+      const { outcome, body, state } = await run({ body: { stallAfter: 2, chunkSize: 16 }, stallMs: 20 });
+      expect(outcome.error).toMatchObject({ kind: 'network_stalled' });
+      expect(state.cancelled).toBe(true);
+      expect(body.locked).toBe(false);
+    });
+
+    it('a decoder error: damaged, the unfinished body is cancelled and unlocked', async () => {
+      const env = setup({ bytes: BIG });
+      const gz = Uint8Array.from(env.pointer.gz);
+      gz[0] ^= 0xff;
+      const { outcome, body, state } = await run({ bytes: BIG, gz, body: HELD });
+      expect(outcome.error).toMatchObject({ kind: 'damaged' });
+      expect(state.closed).toBe(false);
+      expect(state.cancelled).toBe(true);
+      expect(body.locked).toBe(false);
+    });
+
+    it('an importer error: storage, the unfinished body is cancelled and unlocked', async () => {
+      const importDb = async (name, pull) => {
+        await pull();
+        throw new Error('disk full');
+      };
+      const { outcome, body, state } = await run({ bytes: BIG, body: HELD, importDb });
+      expect(outcome.error).toMatchObject({ kind: 'storage' });
+      expect(state.closed).toBe(false);
+      expect(state.cancelled).toBe(true);
+      expect(body.locked).toBe(false);
+    });
+
+    it('a setup failure after the response: the body is cancelled and unlocked', async () => {
+      const env = setup();
+      const tracked = trackedBody(env.pointer.gz);
+      const installer = createInstaller({
+        pool: env.pool,
+        bridge: env.bridge,
+        fetchImpl: vi.fn(async () => ({ status: 200, body: tracked.body })),
+        random: () => 'aaaaaaaa',
+        decompressionStream: () => { throw new Error('no decoder'); }
+      });
+      await expect(installer.install({ pointer: env.pointer, profile: PROFILE, operationId: 'op1' })).rejects.toBeTruthy();
+      await new Promise((resolve) => { setTimeout(resolve, 10); });
+      expect(tracked.state.cancelled).toBe(true);
+      expect(tracked.body.locked).toBe(false);
+      expect(env.pool.importDb).not.toHaveBeenCalled();
+    });
+
+    it('a non-200 answer with an unfinished body: network, the body is cancelled, nothing is staged', async () => {
+      const { outcome, body, state, env } = await run({ status: 503 });
+      expect(outcome.error).toMatchObject({ kind: 'network' });
+      expect(state.cancelled).toBe(true);
+      expect(body.locked).toBe(false);
+      expect(env.pool.importDb).not.toHaveBeenCalled();
+      expect([...env.pool.files.keys()]).toEqual([]);
+    });
+  });
+
   it('a failed deletion of the retired file leaves it pending', async () => {
     const env = setup({
       settings: { localDb: installed() }, pool: { unlinkFails: new Set(['/old.db']) }

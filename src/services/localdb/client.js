@@ -75,9 +75,12 @@ const MESSAGES = {
 export class LocalDbError extends Error {
   /** @param {string} kind - Failure kind */
   constructor(kind) {
-    super(MESSAGES[kind] || MESSAGES.db_worker_failed);
+    // Only OWN keys are known kinds: `toString`, `__proto__` and the like are
+    // unknown (review-6 finding 3).
+    const known = typeof kind === 'string' && Object.hasOwn(MESSAGES, kind);
+    super(known ? MESSAGES[kind] : MESSAGES.db_worker_failed);
     this.name = 'LocalDbError';
-    this.kind = MESSAGES[kind] ? kind : 'db_worker_failed';
+    this.kind = known ? kind : 'db_worker_failed';
   }
 }
 
