@@ -70,6 +70,7 @@ export const VERIFY_BATCH_BYTES = 1024 * 1024;
  *   onProgress?:Function, onPhase?:Function, onGate?:Function, monotonicNow?:()=>number,
  *   yieldToMacrotask?:()=>Promise<void>, budgetMs?:number, verifyBatchBytes?:number,
  *   decompressionStream?:Function, stallMs?:number}} deps - Injected environment
+ * @param {object|null} [faults] - Fault build only (§21): the worker fault hooks
  * @returns {object} - The installer
  */
 export const createInstaller = ({
@@ -88,7 +89,7 @@ export const createInstaller = ({
   verifyBatchBytes = VERIFY_BATCH_BYTES,
   decompressionStream = () => new DecompressionStream('gzip'),
   stallMs = STALL_TIMEOUT_MS
-}) => {
+}, faults = null) => {
   // The one mutation, reserved SYNCHRONOUSLY before the first await
   // (HOUSE_RULES 13). `phase` reaching 'committing' refuses every cancel.
   let mutation = null;
@@ -175,6 +176,10 @@ export const createInstaller = ({
     if (!isPoolFileName(name)) return false;
     if (retainedNames().has(name)) return false;
     try {
+      // SPEC-P5 §21 `delete`: after the name and retained-handle checks.
+      if (__LCSH_FAULTS__ && faults?.armed('delete')) {
+        await faults.fire('delete', { operationId: mutation?.operationId ?? null, file: name });
+      }
       return await pool.unlink(name);
     } catch (e) {
       return false;
@@ -204,7 +209,7 @@ export const createInstaller = ({
   /** §4.4 steps 2–8 plus §4.5 step 1, in download.js. */
   const streamImport = ({ entry, staging }) => {
     setPhase('downloading');
-    return streamDatabase({
+    const args = {
       entry,
       staging,
       pool,
@@ -216,7 +221,13 @@ export const createInstaller = ({
       now,
       checkpoint: () => mutation.budget.checkpoint(),
       onProgress: (event) => onProgress({ operationId: mutation.operationId, ...event })
-    });
+    };
+    // SPEC-P5 §21 `import-write`.
+    if (__LCSH_FAULTS__ && faults?.armed('import-write')) {
+      const { operationId } = mutation;
+      return streamDatabase(args, (pull) => faults.wrapImportPull(pull, { operationId }));
+    }
+    return streamDatabase(args);
   };
 
   /** §4.5 steps 2–6 on the imported staging file. */
@@ -254,7 +265,15 @@ export const createInstaller = ({
     gateQueries();
     let answer = null;
     try {
+      // SPEC-P5 §21 `commit-before`: committing and gated, before the request.
+      if (__LCSH_FAULTS__ && faults?.armed('commit-before')) {
+        await faults.fire('commit-before', { operationId: mutation.operationId });
+      }
       answer = await bridge.commit({ operationId: mutation.operationId, expectedLocalDb, patch });
+      // SPEC-P5 §21 `commit-lost`: a REAL successful answer, hidden before it is interpreted.
+      if (__LCSH_FAULTS__ && answer?.ok === true && faults?.armed('commit-lost')) {
+        await faults.fire('commit-lost', { operationId: mutation.operationId });
+      }
     } catch (err) {
       answer = null;
     }
@@ -358,6 +377,10 @@ export const createInstaller = ({
       state = 'ready';
       const closed = await closeHandle(previous);
       ungate();
+      // SPEC-P5 §21 `after-switch` (crash only): switched, before retirement.
+      if (__LCSH_FAULTS__ && faults?.armed('after-switch')) {
+        await faults.fire('after-switch', { operationId: mutation.operationId });
+      }
 
       setPhase('cleaning');
       const cleaned = await retire(oldFile, record, closed);

@@ -19,6 +19,7 @@ export const formatBytes = (n) => {
 export const KEEP_TAB_OPEN = 'Keep this tab open until it finishes.';
 export const FULL_WARNING = 'Large download (about 1.9 GB) and about 5.4 GB of disk space.';
 export const COMMITTING_TEXT = 'Finishing install…';
+export const UNINSTALLING_TEXT = 'Uninstalling…';
 
 /** The §3.4 / §3.1 states in words, with what the user can do about them. */
 export const STATE_TEXT = {
@@ -115,6 +116,9 @@ export const LocalDbSettings = ({
 }) => {
   const busy = Boolean(operation);
   const committing = operation?.phase === 'committing' || operation?.phase === 'cleaning';
+  // An uninstall downloads nothing, so it never shows byte counts.
+  const uninstalling = operation?.kind === 'uninstall';
+  const finishingText = uninstalling ? UNINSTALLING_TEXT : COMMITTING_TEXT;
   const stateText = STATE_TEXT[state];
   return (
     <Box sx={{ mt: 3 }}>
@@ -173,7 +177,7 @@ export const LocalDbSettings = ({
       {busy && (
         <Box sx={{ my: 2 }}>
           <Typography variant="body2">
-            {committing ? COMMITTING_TEXT : `${progress?.phase === 'verifying' ? 'Verifying' : 'Downloading'}: ${formatBytes(progress?.done)} of ${formatBytes(progress?.total)}`}
+            {uninstalling || committing ? finishingText : `${progress?.phase === 'verifying' ? 'Verifying' : 'Downloading'}: ${formatBytes(progress?.done)} of ${formatBytes(progress?.total)}`}
           </Typography>
           <LinearProgress
             variant={progress?.total ? 'determinate' : 'indeterminate'}
@@ -183,7 +187,7 @@ export const LocalDbSettings = ({
           <Typography variant="caption" color="text.secondary">{KEEP_TAB_OPEN}</Typography>
           <Box sx={{ mt: 1 }}>
             <Button size="small" disabled={committing} onClick={() => onCancel(operation.operationId)}>
-              {committing ? COMMITTING_TEXT : 'Cancel'}
+              {committing ? finishingText : 'Cancel'}
             </Button>
           </Box>
         </Box>

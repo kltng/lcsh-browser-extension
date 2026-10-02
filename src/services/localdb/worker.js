@@ -27,6 +27,7 @@ import { createInstaller, InstallError } from './install';
 import { createFilePointerVfs, VerifyError } from './verify';
 import { acquirePool, installRemoveEntryGuard, AcquireError, POOL_NAME } from './guard';
 import { monotonicNow, macrotask } from './budget';
+import { createWorkerFaults } from './faults';
 
 export { POOL_NAME };
 /** A lost bridge answer is an UNRESOLVED commit (§4.5 step 7), not a silent hang. */
@@ -52,6 +53,7 @@ const kinded = (kind, message) => {
  * @param {{post:Function, createPool:()=>Promise<object>, createInstallerImpl?:Function,
  *   bridgeTimeoutMs?:number, setTimeoutImpl?:Function, clearTimeoutImpl?:Function,
  *   monotonic?:()=>number, yieldToMacrotask?:()=>Promise<void>}} deps - Injected environment
+ * @param {{close?:()=>void}|null} [faultEnv] - Fault build only (§21): how a `crash` closes this worker
  * @returns {{handleMessage:(message:object)=>void}}
  */
 export const createWorkerDispatcher = ({
@@ -63,7 +65,7 @@ export const createWorkerDispatcher = ({
   clearTimeoutImpl = clearTimeout,
   monotonic = monotonicNow,
   yieldToMacrotask = macrotask
-}) => {
+}, faultEnv = null) => {
   let pool = null;
   let installer = null;
   // §3.2 rule 2: ONE acquisition attempt per worker. 'none' → 'acquiring' →
@@ -80,6 +82,8 @@ export const createWorkerDispatcher = ({
   // passed. A `status` or `query` RPC can no longer overwrite the identity a
   // running install will commit under.
   let workerGeneration = null;
+  // SPEC-P5 §21: the fault hooks of this worker, from its first `acquire`.
+  let faults = null;
 
   /** One bridge round trip to the page (§3.3), for one named operation. */
   const askBridge = (operationId, payload) => new Promise((resolve, reject) => {
@@ -115,7 +119,16 @@ export const createWorkerDispatcher = ({
    * possible after it succeeded.
    * @returns {Promise<{acquired:true}>}
    */
-  const acquire = () => {
+  const acquire = (args = {}) => {
+    // §21: the plan travels ONLY in the first `acquire`, before any recovery.
+    if (__LCSH_FAULTS__ && args.faults && acquisition === 'none' && !faults) {
+      faults = createWorkerFaults({
+        plan: args.faults,
+        workerGeneration,
+        post,
+        close: faultEnv?.close ?? (() => globalThis.close())
+      });
+    }
     if (acquisition === 'acquired') return Promise.resolve({ acquired: true });
     if (acquisition === 'failed') {
       // Never retry inside the same worker: the pinned initializer caches its
@@ -131,7 +144,7 @@ export const createWorkerDispatcher = ({
         acquisition = 'failed';
         throw err instanceof AcquireError ? err : new AcquireError('db_init_failed', 'The local database storage could not be opened.');
       }
-      installer = createInstallerImpl({
+      const installerDeps = {
         pool,
         bridge,
         onProgress: (event) => post({ type: 'progress', ...event }),
@@ -143,7 +156,9 @@ export const createWorkerDispatcher = ({
         // §4.4 step 7b: the shared cooperative work budget.
         monotonicNow: monotonic,
         yieldToMacrotask
-      });
+      };
+      if (__LCSH_FAULTS__ && faults) installer = createInstallerImpl(installerDeps, faults);
+      else installer = createInstallerImpl(installerDeps);
       acquisition = 'acquired';
       return { acquired: true };
     })().finally(() => { acquiring = null; });
@@ -186,7 +201,7 @@ export const createWorkerDispatcher = ({
       record: installer ? installer.record() : null,
       operation: installer ? installer.operation() : null
     }),
-    acquire: () => acquire(),
+    acquire: (args) => acquire(args),
     query: (args) => {
       requireInstaller();
       return runQuery(args);
@@ -230,6 +245,10 @@ export const createWorkerDispatcher = ({
         bridgeWaiters.delete(message.bridgeId);
         const { type, bridgeId, ...answer } = message;
         waiter.resolve(answer);
+        return;
+      }
+      if (__LCSH_FAULTS__ && message.type === 'fault-ack') {
+        faults?.handleAck(message);
         return;
       }
       if (message.type === 'drop') {
@@ -335,9 +354,12 @@ export const createRealPool = async ({ scope = globalThis, initModule = sqlite3I
 // Bootstrap: only inside a real Worker.
 const scope = typeof self === 'undefined' ? null : self;
 if (scope && typeof scope.addEventListener === 'function' && typeof scope.postMessage === 'function') {
-  const dispatcher = createWorkerDispatcher({
+  const deps = {
     post: (message) => scope.postMessage(message),
     createPool: () => createRealPool({ scope })
-  });
+  };
+  let dispatcher;
+  if (__LCSH_FAULTS__) dispatcher = createWorkerDispatcher(deps, { close: () => scope.close() });
+  else dispatcher = createWorkerDispatcher(deps);
   scope.addEventListener('message', (event) => dispatcher.handleMessage(event.data));
 }

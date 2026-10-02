@@ -18,6 +18,7 @@ import SettingsIcon from '@mui/icons-material/Settings';
 import SettingsPage from './components/SettingsPage';
 import { AppProvider } from './context/AppContext';
 import { createLocalDbClient } from './services/localdb/client';
+import { createDocumentFaults } from './services/localdb/faults';
 import { createUpdateChecker } from './services/localdb/pointer';
 import { localDbUpdateCheck, getSettings } from './services/settings';
 import BibliographicInfoForm from './components/BibliographicInfoForm';
@@ -57,9 +58,13 @@ const SETTINGS_HASH = '#settings';
 // SPEC-P5 §3.1: ONE local-database client per app document, created at module
 // level ABOVE the hash-route components, so the workflow and #settings share
 // it and hash navigation never terminates it. The popup never creates one.
+// SPEC-P5 §21: only the fault-injection test build reads a fault plan, once,
+// from this document's own query. The shipped build compiles this out.
+let localDbFaults = null;
+if (__LCSH_FAULTS__) localDbFaults = createDocumentFaults({ search: window.location.search });
 const localDbClient = createLocalDbClient({
   createWorker: () => new Worker(new URL('./services/localdb/worker.js', import.meta.url), { type: 'module' })
-});
+}, localDbFaults);
 // The owner Web Lock is requested before the worker exists; a tab that does
 // not get it simply uses the Library of Congress online.
 localDbClient.start().catch(() => {});

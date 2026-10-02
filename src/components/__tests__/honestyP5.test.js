@@ -2,8 +2,10 @@ import { describe, it, expect, vi } from 'vitest';
 import { MatchesPanel } from '../ScrapedResults';
 import { RecommendationsPanel, hasUnresolvedNameKeys } from '../FinalRecommendations';
 import {
-  LocalDbSettings, ConfirmationBody, subscribePanel, confirmationLines, formatBytes, KEEP_TAB_OPEN, FULL_WARNING, COMMITTING_TEXT
+  LocalDbSettings, ConfirmationBody, subscribePanel, confirmationLines, formatBytes, KEEP_TAB_OPEN, FULL_WARNING, COMMITTING_TEXT,
+  UNINSTALLING_TEXT
 } from '../LocalDbSettings';
+import { createLocalDbClient } from '../../services/localdb/client';
 import { V2EntryView } from '../ConversationHistory';
 import { lcLink, sourceLine, viaNote, replacementNoteText, LOCAL_DB_ERROR_TEXT } from '../pipelineText';
 import { buildHistoryEntry } from '../../services/history';
@@ -439,5 +441,60 @@ describe('[P5 row12] the Lookup source settings section', () => {
     expect(text).not.toContain('Cancel');
     // While a mutation runs, no new download can be started either.
     expect(text).not.toContain('Core — subjects and genres');
+  });
+});
+
+// Live finding (lead, fix 6): an uninstall read "Downloading: — of —".
+describe('[P5 fix6] the busy panel during an uninstall', () => {
+  /** A worker that acquires, recovers to `ready`, and leaves every other RPC unanswered. */
+  const quietWorker = () => {
+    const listeners = new Set();
+    const worker = {
+      addEventListener: (type, fn) => { if (type === 'message') listeners.add(fn); },
+      terminate: () => {},
+      emit: (data) => listeners.forEach((fn) => fn({ data })),
+      postMessage: (message) => {
+        if (message?.type !== 'rpc') return;
+        const result = { acquire: { acquired: true }, recover: { state: 'ready', record: null } }[message.op];
+        if (result) queueMicrotask(() => worker.emit({ type: 'rpc-result', id: message.id, ok: true, result }));
+      }
+    };
+    return worker;
+  };
+  const panel = (operation, progress = null) => textOf(renderHtml(LocalDbSettings, {
+    lookupBackend: 'local-db', installed: null, state: null, pointer: null, operation, progress,
+    onBackendChange: vi.fn(), onInstall: vi.fn(), onRepair: vi.fn(), onUninstall: vi.fn(),
+    onCancel: vi.fn(), onRetryOwnership: vi.fn()
+  }));
+
+  it('says "Uninstalling…" with no byte counts; the install texts are unchanged', async () => {
+    let worker;
+    const client = createLocalDbClient({ createWorker: () => { worker = quietWorker(); return worker; } });
+    await client.start();
+    client.uninstall({ operationId: 'u1' }).catch(() => {});
+    // The client's own operation, before and after the worker's first phase.
+    const preparing = client.operation();
+    expect(preparing).toMatchObject({ operationId: 'u1', phase: 'preparing', kind: 'uninstall' });
+    worker.emit({ type: 'phase', operationId: 'u1', phase: 'committing' });
+    const committing = client.operation();
+    expect(committing).toMatchObject({ phase: 'committing', kind: 'uninstall' });
+    for (const operation of [preparing, committing, { ...committing, phase: 'cleaning' }]) {
+      const text = panel(operation);
+      expect(text).toContain(UNINSTALLING_TEXT);
+      expect(text).not.toContain('Downloading');
+      // No byte counts at all ("— of —" or "1 MB of 62 MB").
+      expect(text).not.toMatch(/(—|B) of (—|\d)/);
+      expect(text).not.toContain(COMMITTING_TEXT);
+    }
+    client.dispose();
+
+    // Install, repair and update keep their texts.
+    expect(panel({ operationId: 'i1', phase: 'downloading', kind: 'install' }, { phase: 'downloading', done: 1_000_000, total: 62_000_000 }))
+      .toContain('Downloading: 1 MB of 62 MB');
+    expect(panel({ operationId: 'i1', phase: 'verifying', kind: 'install' }, { phase: 'verifying', done: 1_000_000, total: 205_000_000 }))
+      .toContain('Verifying: 1 MB of 205 MB');
+    const finishing = panel({ operationId: 'i1', phase: 'committing', kind: 'install' });
+    expect(finishing).toContain(COMMITTING_TEXT);
+    expect(finishing).not.toContain(UNINSTALLING_TEXT);
   });
 });

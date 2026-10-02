@@ -66,6 +66,7 @@ export class LocalDbError extends Error {
  * @param {{createWorker:Function, locks?:object, settingsApi?:object, hangMs?:number, probeMs?:number,
  *   acquireBudgetMs?:number, backoffMs?:(attempt:number)=>number, now?:()=>number,
  *   sleep?:(ms:number)=>Promise<void>, onChange?:Function, onProgress?:Function}} deps - Injected environment
+ * @param {object|null} [faults] - Fault build only (§21): this document's fault state
  * @returns {object}
  */
 export const createLocalDbClient = ({
@@ -82,7 +83,7 @@ export const createLocalDbClient = ({
   sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); }),
   onChange = () => {},
   onProgress = () => {}
-}) => {
+}, faults = null) => {
   let generation = 0;
   let starts = 0;
   let crashes = 0;
@@ -138,7 +139,7 @@ export const createLocalDbClient = ({
   const setPhase = (operationId, phase) => {
     if (!operation || operation.operationId !== operationId) return;
     if (FINAL_PHASES.includes(operation.phase) && !FINAL_PHASES.includes(phase)) return;
-    operation = { operationId, phase };
+    operation = { ...operation, phase };
     notifyProgress();
   };
 
@@ -190,12 +191,16 @@ export const createLocalDbClient = ({
         answerBridge(source, bridgeId, { ok: true, current });
         return;
       }
-      const result = await settingsApi.commit({
+      const request = {
         expectedLocalDb: expectedLocalDb ?? null,
         patch,
         // Step 4: rechecked immediately before the write, no await in between.
         fence: () => isCurrent(workerGeneration, operationId)
-      });
+      };
+      let result;
+      // SPEC-P5 §21 `settings-write`: a page-side hook for this admitted request.
+      if (__LCSH_FAULTS__ && faults) result = await settingsApi.commit(request, faults.settingsWrite({ workerGeneration, operationId }));
+      else result = await settingsApi.commit(request);
       answerBridge(source, bridgeId, result);
     })().catch(() => {
       answerBridge(source, bridgeId, { ok: false, reason: 'write-failed' });
@@ -211,6 +216,12 @@ export const createLocalDbClient = ({
     if (!message || typeof message !== 'object') return;
     if (message.type === 'bridge') {
       handleBridge(message, source);
+      return;
+    }
+    // SPEC-P5 §21: the page owns the fault state. A claim is answered only to
+    // the worker that asked, and only the current generation can consume.
+    if (__LCSH_FAULTS__ && message.type === 'fault-claim') {
+      if (faults) postTo(source, faults.answerClaim(message, message.workerGeneration === generation));
       return;
     }
     if (message.type === 'phase' || message.type === 'progress') {
@@ -321,8 +332,14 @@ export const createLocalDbClient = ({
       // whole acquisition window, so the two can never race (§3.2 rule 3).
       clearWatchdog();
       watchdog = setTimeout(() => crash(myGeneration), Math.max(0, deadline - now()) + hangMs);
+      const acquireArgs = {};
+      // SPEC-P5 §21: the unconsumed worker points travel in this first RPC.
+      if (__LCSH_FAULTS__ && faults) {
+        const plan = faults.workerPlan();
+        if (plan) acquireArgs.faults = plan;
+      }
       try {
-        await call('acquire', {});
+        await call('acquire', acquireArgs);
         clearWatchdog();
         return generation === myGeneration && epoch === myEpoch ? 'acquired' : 'stale';
       } catch (err) {
@@ -475,7 +492,8 @@ export const createLocalDbClient = ({
     const operationId = args.operationId;
     if (runningOperation !== null) throw new LocalDbError('db_busy');
     runningOperation = operationId;
-    operation = { operationId, phase: 'preparing' };
+    // `kind` lets the panel say what is running ('install' or 'uninstall').
+    operation = { operationId, phase: 'preparing', kind: op };
     progress = null;
     notifyProgress();
     try {

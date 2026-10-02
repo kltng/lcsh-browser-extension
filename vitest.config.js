@@ -1,6 +1,9 @@
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
+  // SPEC-P5 §21: the hook tests run with the fault build's definition; the
+  // shipped configurations define it as false (see faultsConfig.test.js).
+  define: { __LCSH_FAULTS__: true },
   test: {
     environment: 'node',
     setupFiles: ['./test/setup.js'],

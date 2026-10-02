@@ -182,9 +182,10 @@ export const readLocalDbSettings = async () => {
  * (4) run `fence()` immediately before the write with NO await in between
  * (HOUSE_RULES 13), (5) apply the allowlisted patch and write.
  * @param {{expectedLocalDb:object|null, patch:object, fence?:()=>boolean}} args - Expected base, patch, generation fence
+ * @param {(()=>void)|null} [faultHook] - Fault build only (§21 `settings-write`)
  * @returns {Promise<{ok:boolean, reason?:string, current:object}>}
  */
-export const commitLocalDb = async ({ expectedLocalDb = null, patch = {}, fence = () => true }) => {
+export const commitLocalDb = async ({ expectedLocalDb = null, patch = {}, fence = () => true }, faultHook = null) => {
   for (const key of Object.keys(patch)) {
     if (!LOCAL_DB_PATCH_KEYS.includes(key)) throw new Error(`Not a local database patch field: ${key}`);
   }
@@ -216,6 +217,9 @@ export const commitLocalDb = async ({ expectedLocalDb = null, patch = {}, fence 
     if (Object.keys(writes).length === 0) return { ok: true, current: next };
     if (!fence()) return { ok: false, reason: 'stale-generation', current: fresh };
     try {
+      // SPEC-P5 §21 `settings-write`: synchronous, after the final fence, and
+      // only for a patch that carries `localDb` (install/uninstall).
+      if (__LCSH_FAULTS__ && faultHook && Object.hasOwn(patch, 'localDb')) faultHook();
       await storage().set(writes);
     } catch (err) {
       return { ok: false, reason: 'write-failed', current: fresh };

@@ -93,12 +93,13 @@ const meteredStream = (hash, limit) => new TransformStream({
  * @param {{entry:object, staging:string, pool:object, controller:AbortController,
  *   isCancelled:()=>boolean, fetchImpl:Function, decompressionStream:Function, stallMs:number,
  *   now:()=>number, onProgress:(event:object)=>void}} args - The download and its environment
+ * @param {Function|null} [wrapImportPull] - Fault build only (§21): wraps the importer's pull callback
  * @returns {Promise<void>}
  */
 export const streamDatabase = async ({
   entry, staging, pool, controller, isCancelled, fetchImpl, decompressionStream, stallMs, now, onProgress,
   checkpoint = async () => false
-}) => {
+}, wrapImportPull = null) => {
   // Review finding 10: the inactivity deadline starts BEFORE the fetch, so a
   // request whose headers never arrive stops the install as well; it is reset
   // only by bytes that actually arrived.
@@ -182,7 +183,10 @@ export const streamDatabase = async ({
     };
 
     try {
-      await pool.importDb(staging, coalescingPull(next));
+      let pull = coalescingPull(next);
+      // SPEC-P5 §21 `import-write`: the fault build wraps the real pull callback.
+      if (__LCSH_FAULTS__ && wrapImportPull) pull = wrapImportPull(pull);
+      await pool.importDb(staging, pull);
     } catch (err) {
       if (err instanceof InstallError) throw err;
       throw new InstallError('storage');

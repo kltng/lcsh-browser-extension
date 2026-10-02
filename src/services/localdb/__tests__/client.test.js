@@ -597,7 +597,7 @@ describe('[P5 fix9] the operation lives in the client, not in the panel', () => 
     // A panel that mounts NOW gets the snapshot immediately.
     const seen = [];
     const stop = client.onProgress((snapshot) => seen.push(snapshot));
-    expect(seen[0].operation).toEqual({ operationId: 'op1', phase: 'downloading' });
+    expect(seen[0].operation).toEqual({ operationId: 'op1', phase: 'downloading', kind: 'install' });
     expect(seen[0].progress).toEqual({ phase: 'downloading', done: 10, total: 100 });
     stop();
 
