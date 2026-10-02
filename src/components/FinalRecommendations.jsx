@@ -11,7 +11,7 @@ import { copyAllText, recommendationsCsv, marcUnavailableText } from '../service
 import { NONE_REASON_WORDS } from '../services/pipeline/types';
 import { needsNameKey } from '../services/pipeline/nameKeys';
 import { KeyEchoError, shownText } from '../services/keyGuard';
-import { useKnownKeys } from './useKnownKeys';
+import { useKnownKeys, KeysUnavailableNotice } from './useKnownKeys';
 import { methodText, authorityLabel, lcLink, viaNote } from './pipelineText';
 
 /**
@@ -174,6 +174,7 @@ const FinalRecommendations = () => {
   return (
     <Box>
       <Typography variant="h6" gutterBottom>Recommendations</Typography>
+      <KeysUnavailableNotice />
       {saveError && <Alert severity="error" sx={{ mb: 2 }}>{saveError}</Alert>}
       {hasUnresolvedNameKeys(recommendations) && (
         <Alert

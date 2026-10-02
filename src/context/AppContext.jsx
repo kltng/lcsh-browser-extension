@@ -2,7 +2,7 @@ import React, { createContext, useState, useContext, useEffect, useRef, useSyncE
 import {
   loadSystemPromptRules, saveSystemPromptRules, getSettings, onSettingsChanged, readStoredApiKeys
 } from '../services/settings';
-import { watchStoredKeys } from '../services/keyGuard';
+import { ensureDocumentKeyWatcher, markKeysPending } from '../services/keyGuard';
 import { resolveConfig } from '../services/providers/index';
 import {
   initialRulesState, editRules, applyStoredRules, afterRulesSave, afterRulesReset
@@ -72,11 +72,11 @@ export const AppProvider = ({ children, localDbClient = null, localDbUpdates = n
   const [settingsStatus, setSettingsStatus] = useState('loading');
   const [settingsError, setSettingsError] = useState(null);
 
-  // P6 fix 13/15: the exit guard knows every stored key, kept current. It is
-  // started BEFORE the first render, so the views that hide key echoes show
-  // "Loading…" (not model text) until the stored keys have loaded once.
-  const keysWatchRef = useRef(null);
-  if (!keysWatchRef.current) keysWatchRef.current = watchStoredKeys({ readStoredApiKeys, onSettingsChanged });
+  // P6 fix 13/15/16: the exit guard knows every stored key, kept current.
+  // Rendering only MARKS the registry as waiting (no subscription), so the
+  // very first paint shows "Loading…" for model text; the document's one
+  // watcher is started in the effect below, so a discarded render leaks nothing.
+  markKeysPending();
 
   // The pipeline run (run.js state behind the workflow controller)
   const workflowRef = useRef(null);
@@ -118,8 +118,8 @@ export const AppProvider = ({ children, localDbClient = null, localDbUpdates = n
       setRulesState((state) => applyStoredRules(state, changes.systemPromptRules.newValue));
     });
 
-    // A cleanup (React StrictMode) may have stopped the watcher; start it again.
-    if (!keysWatchRef.current) keysWatchRef.current = watchStoredKeys({ readStoredApiKeys, onSettingsChanged });
+    // One watcher per document: a second effect run starts nothing new.
+    ensureDocumentKeyWatcher({ readStoredApiKeys, onSettingsChanged });
 
     loadHistory()
       .then((entries) => { if (alive) setConversationHistory(entries); })
@@ -129,8 +129,6 @@ export const AppProvider = ({ children, localDbClient = null, localDbUpdates = n
     return () => {
       alive = false;
       unsubscribeSettings();
-      keysWatchRef.current?.();
-      keysWatchRef.current = null;
       unsubscribeHistory();
       workflow.dispose();
     };

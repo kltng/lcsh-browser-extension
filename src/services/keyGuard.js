@@ -23,12 +23,15 @@ export const KEY_ECHO_MESSAGES = {
   lookup: 'A search term repeats an API key, so it was not sent to id.loc.gov.',
   history: 'This run contains text that repeats an API key, so it was not saved to history.',
   export: 'This text repeats an API key, so it was not copied or exported.',
+  // P6 fix 16: the FINISHED selection prompt (also the user's own text and the
+  // fixed instructions), so the model-answer wording would be wrong.
+  prompt: 'The text sent for choosing headings contains one of your API keys, so it was not sent. Remove the key from the record and try again.',
   display: 'The AI answer repeats an API key, so it was not used.'
 };
 
 /** A key found at an exit. Local text only. */
 export class KeyEchoError extends Error {
-  /** @param {'lookup'|'history'|'export'|'display'} exit - The exit that refused */
+  /** @param {'lookup'|'history'|'export'|'display'|'prompt'} exit - The exit that refused */
   constructor(exit) {
     super(KEY_ECHO_MESSAGES[exit] || KEY_ECHO_MESSAGES.display);
     this.name = 'KeyEchoError';
@@ -156,10 +159,6 @@ export const keysOfSettings = (settings) => Object.values(settings?.providers ||
   .map((p) => (typeof p?.apiKey === 'string' ? p.apiKey.trim() : ''))
   .filter(Boolean);
 
-/**
- * Replace the stored keys.
- * @param {string[]} keys - Every key stored now
- */
 // P6 fix 15: readiness and ordering of the stored keys. A watcher makes the
 // registry NOT ready until its first read succeeded; views show no model text
 // before that. Every read takes a sequence number, and only a result newer
@@ -169,11 +168,20 @@ let ready = true;
 let loadedOnce = false;
 let readSeq = 0;
 let appliedSeq = 0;
+// P6 fix 16: a FIRST read that failed (no good set yet) is shown as a local
+// message with "Try again", not as "Loading…" for ever.
+let firstReadFailed = false;
+let latestRefresh = null;
+let documentWatcher = null;
 
 const applyStoredKeys = (keys, seq) => {
   if (seq <= appliedSeq) return;
   appliedSeq = seq;
   loadedOnce = true;
+  if (firstReadFailed) {
+    firstReadFailed = false;
+    keysChanged();
+  }
   const next = usableKeys(keys);
   const same = next.length === storedKeys.length && next.every((k, i) => k === storedKeys[i]);
   storedKeys = next;
@@ -193,6 +201,25 @@ export const setStoredKeys = (keys) => {
 
 /** Whether the stored keys have loaded at least once (or no watcher is waiting for them). */
 export const keysReady = () => ready;
+
+/**
+ * The registry state for the views: 'ready', 'loading' (the first read is
+ * still running) or 'failed' (the first read failed; nothing good is known).
+ * @returns {'ready'|'loading'|'failed'}
+ */
+export const keysState = () => {
+  if (ready) return 'ready';
+  return firstReadFailed ? 'failed' : 'loading';
+};
+
+/**
+ * Mark the registry as waiting for its first read, without starting anything
+ * (P6 fix 16). The app provider calls it while rendering, so the very first
+ * paint is already fail-closed; the watcher itself starts in an effect.
+ */
+export const markKeysPending = () => {
+  if (!loadedOnce) ready = false;
+};
 
 /**
  * The keys for exits (a) and (b): every run key of this document plus every
@@ -226,16 +253,38 @@ export const watchStoredKeys = ({ readStoredApiKeys, onSettingsChanged }) => {
       .catch(() => {
         // The last good set is kept. Local text only: never the error or a key.
         console.error('[keys] The stored API keys could not be read; the last known set is kept.');
+        if (alive && !loadedOnce && !firstReadFailed) {
+          firstReadFailed = true;
+          keysChanged();
+        }
       });
   };
+  latestRefresh = refresh;
   refresh();
   const stop = onSettingsChanged((changes) => {
     if (Object.keys(changes).some((k) => k.startsWith('provider:') || k === 'geminiApiKey')) refresh();
   });
   return () => {
     alive = false;
+    if (latestRefresh === refresh) latestRefresh = null;
     stop();
   };
+};
+
+/**
+ * "Try again" after a failed read: read the stored keys once more.
+ * @returns {Promise<void>}
+ */
+export const retryStoredKeys = () => (latestRefresh ? latestRefresh() : Promise.resolve());
+
+/**
+ * The ONE stored-key watcher of this document (P6 fix 16). Starting it again
+ * does nothing, so effects that run twice can never create a second
+ * subscription; it lives as long as the document.
+ * @param {{readStoredApiKeys:Function, onSettingsChanged:Function}} deps - Settings functions
+ */
+export const ensureDocumentKeyWatcher = (deps) => {
+  if (!documentWatcher) documentWatcher = watchStoredKeys(deps);
 };
 
 /** The fixed text shown instead of a display value that repeats a known key. */
@@ -253,8 +302,10 @@ export const HIDDEN_TEXT = 'Hidden: this text repeats an API key.';
  */
 export const shownText = (text, keys = documentKeys()) => {
   if (typeof text !== 'string' || text === '') return text;
-  // Before the stored keys have loaded once, nothing model-derived is shown.
-  if (!ready) return LOADING_TEXT;
+  // Before the stored keys have loaded once, nothing model-derived is shown:
+  // "Loading…" while the first read runs, nothing at all after it failed (the
+  // page shows the failure message with "Try again").
+  if (!ready) return firstReadFailed ? '' : LOADING_TEXT;
   return valueHasKey(textFields(text), keys) ? HIDDEN_TEXT : text;
 };
 
@@ -269,5 +320,12 @@ export const resetKeyRegistry = () => {
   loadedOnce = false;
   readSeq = 0;
   appliedSeq = 0;
+  firstReadFailed = false;
+  latestRefresh = null;
+  documentWatcher?.();
+  documentWatcher = null;
   keysChanged();
 };
+
+/** The local message of a failed first key read. */
+export const KEYS_FAILED_MESSAGE = 'Your saved settings could not be read, so AI text is hidden. Try again.';

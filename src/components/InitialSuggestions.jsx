@@ -6,7 +6,7 @@ import { useAppContext } from '../context/AppContext';
 import { TEXT_FALLBACK_NOTICE } from '../services/pipeline/suggest';
 import { SUGGESTION_NOTE } from './pipelineText';
 import { shownText } from '../services/keyGuard';
-import { useKnownKeys } from './useKnownKeys';
+import { useKnownKeys, KeysUnavailableNotice } from './useKnownKeys';
 
 /**
  * Step 2 content: the subject analysis and the AI suggestions (also used read-only by history).
@@ -75,6 +75,7 @@ const InitialSuggestions = () => {
   return (
     <Box>
       <Typography variant="h6" gutterBottom>AI suggestions</Typography>
+      <KeysUnavailableNotice />
       <SuggestionsPanel suggest={run.suggest} />
       <Box sx={{ mt: 3, display: 'flex', justifyContent: 'space-between' }}>
         <Button variant="outlined" onClick={handleBack}>Back</Button>

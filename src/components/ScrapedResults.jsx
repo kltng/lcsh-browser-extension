@@ -9,7 +9,7 @@ import { fallbackNotice } from '../services/lookup/index';
 import { getSettings } from '../services/settings';
 import { outcomeLine, choiceText, authorityLabel, lcLink, sourceLine, viaNote, replacementNoteText } from './pipelineText';
 import { shownText } from '../services/keyGuard';
-import { useKnownKeys } from './useKnownKeys';
+import { useKnownKeys, KeysUnavailableNotice } from './useKnownKeys';
 
 /**
  * One candidate row: label, authority badge, LC link, match class, how the
@@ -159,6 +159,7 @@ const ScrapedResults = () => {
   return (
     <Box>
       <Typography variant="h6" gutterBottom>Matches</Typography>
+      <KeysUnavailableNotice />
       {/* A backend fallback is never silent (HOUSE_RULES 10). */}
       {notice && <Alert severity="info" sx={{ mb: 2 }}>{notice}</Alert>}
       {run.select.mode === 'exact-fallback' && <Alert severity="warning" sx={{ mb: 2 }}>{FALLBACK_BANNER}</Alert>}

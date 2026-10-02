@@ -191,6 +191,38 @@ describe('[P6 fix14] the selection request never carries a known key', () => {
     expect(wf.getState().select.error).toMatchObject({ kind: 'key_echo' });
   });
 
+  // P6 fix 16, item 3: a key that is in the FINISHED prompt only because of the
+  // user's own text gets a prompt-specific message.
+  it('a stored key in the USER\'S notes → not sent, with the prompt-specific message', async () => {
+    const STORED = 'sk-user-pasted-key-0077';
+    const settings = { lookupBackend: 'loc-api', providers: { custom: { apiKey: STORED } } };
+    mockLoc({ 'lcsh leftanchored "Cats"': [EVIDENCE.cats] });
+    const generateImpl = vi.fn()
+      .mockResolvedValueOnce(suggested('Cats'))
+      .mockResolvedValueOnce(answer({ selections: [{ suggestionId: 's1', choice: 's1c1', confidence: 90 }], additional: [] }));
+    const wf = make({ apiKey: 'run-key-A-12345', settings, generateImpl });
+    await wf.suggest({ bibliographicInfo: { title: 'T', notes: `remember ${STORED}` }, rules: '' });
+    await wf.lookupAll();
+    await wf.select();
+    expect(generateImpl).toHaveBeenCalledTimes(1);
+    expect(wf.getState().select.error).toEqual({
+      kind: 'key_echo',
+      message: 'The text sent for choosing headings contains one of your API keys, so it was not sent. Remove the key from the record and try again.'
+    });
+  });
+
+  it('a key echoed in a MODEL heading keeps the model-answer message', async () => {
+    const KEY_C = 'sk-provider-c-key-0042';
+    const settings = { lookupBackend: 'loc-api', providers: { custom: { apiKey: KEY_C } } };
+    mockLoc({ 'lcsh leftanchored "Cats"': [EVIDENCE.cats] });
+    const generateImpl = vi.fn().mockResolvedValueOnce(suggested(`Cats--${KEY_C}`));
+    const wf = make({ apiKey: 'run-key-A-12345', settings, generateImpl });
+    await wf.suggest({ bibliographicInfo: { title: 'T' }, rules: '' });
+    await wf.lookupAll();
+    await wf.select();
+    expect(wf.getState().select.error?.message).toBe('The AI answer repeats an API key, so it was not used.');
+  });
+
   it('an ordinary selection request is still sent', async () => {
     mockLoc({ 'lcsh leftanchored "Cats"': [EVIDENCE.cats] });
     const settings = { lookupBackend: 'loc-api', providers: { custom: { apiKey: 'sk-provider-c-key-0042' } } };

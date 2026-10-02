@@ -163,7 +163,9 @@ const callSelect = async (generateImpl, cfg, info, presentation, signal) => {
   // because formatting can assemble a key from parts that pass on their own
   // (heading `Cats` + kind `topical` → `"Cats" (kind: topical)`).
   const prompt = buildSelectPrompt(info, presentation.presented);
-  guardExit('display', [prompt.system, prompt.userText, ...textFields(prompt.userText)], keys);
+  // Its own message (P6 fix 16): the hit may come from the user's text or the
+  // fixed instructions, not from a model answer.
+  guardExit('prompt', [prompt.system, prompt.userText, ...textFields(prompt.userText)], keys);
   const result = await generateImpl(cfg, {
     ...prompt,
     schema: SELECT_SCHEMA, temperature: 0.1, maxOutputTokens: 2048, signal

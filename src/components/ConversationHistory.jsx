@@ -12,7 +12,7 @@ import {
 } from '../services/history';
 import { getSimilarityColor } from '../utils/similarityUtils';
 import { guardExit, documentKeys, KeyEchoError, shownText } from '../services/keyGuard';
-import { useKnownKeys } from './useKnownKeys';
+import { useKnownKeys, KeysUnavailableNotice } from './useKnownKeys';
 import { SuggestionsPanel } from './InitialSuggestions';
 import { MatchesPanel } from './ScrapedResults';
 import { RecommendationsPanel } from './FinalRecommendations';
@@ -200,6 +200,7 @@ const ConversationHistory = () => {
   return (
     <Box>
       <Typography variant="h6" gutterBottom>History</Typography>
+      <KeysUnavailableNotice />
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
       <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 3 }}>
         <Button variant="contained" onClick={handleNewSearch}>Start New Search</Button>
