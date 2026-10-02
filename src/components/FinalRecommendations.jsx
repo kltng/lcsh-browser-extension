@@ -6,8 +6,9 @@ import {
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import { useAppContext } from '../context/AppContext';
 import { selectionsOf } from '../services/pipeline/run';
-import { subdivisionNote } from '../services/pipeline/select';
+import { subdivisionNote, FALLBACK_BANNER } from '../services/pipeline/select';
 import { copyAllText, recommendationsCsv, marcUnavailableText, marcTextOf } from '../services/pipeline/exports';
+import { formatMarc, NOT_REFORMATTED_NOTE } from '../services/pipeline/marcFormat';
 import ConfidenceBadge from './ConfidenceBadge';
 import { useSubfieldDelimiter } from './useSubfieldDelimiter';
 import { NONE_REASON_WORDS } from '../services/pipeline/types';
@@ -32,7 +33,7 @@ export const hasUnresolvedNameKeys = (recommendations = []) =>
  * @returns {JSX.Element}
  */
 export const RecommendationsPanel = ({
-  recommendations, selections, suggestions, onCopy, onBackToMatches, onEditHeading, delimiter: fixedDelimiter
+  recommendations, selections, suggestions, onCopy, onBackToMatches, onEditHeading, delimiter: fixedDelimiter, selectMode = null
 }) => {
   // P6 fix 14: finished display strings are checked against the known keys,
   // and the view re-renders when those keys change.
@@ -51,6 +52,8 @@ export const RecommendationsPanel = ({
   };
   return (
     <Box>
+      {/* ui-2b item 3: an exact-only fallback is disclosed for as long as its recommendations are shown (live and history). */}
+      {selectMode === 'exact-fallback' && <Alert severity="warning" sx={{ mb: 2 }}>{FALLBACK_BANNER}</Alert>}
       {recommendations.length === 0 && (
         <Typography color="text.secondary" sx={{ mb: 2 }}>No LC heading was chosen.</Typography>
       )}
@@ -91,7 +94,12 @@ export const RecommendationsPanel = ({
                     </IconButton>
                   )}
                 </Box>
-              ) : (
+              ) : null}
+              {/* ui-2b item 5: a stored field whose structure could not be used is shown as saved. */}
+              {rec.marc.status === 'from-authority' && formatMarc(rec.marc, delimiter)?.reformatted === false && (
+                <Typography variant="caption" color="text.secondary" component="div">{NOT_REFORMATTED_NOTE}</Typography>
+              )}
+              {rec.marc.status !== 'from-authority' && (
                 <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
                   {marcUnavailableText(rec.marc.reason)}
                 </Typography>
@@ -234,6 +242,7 @@ const FinalRecommendations = () => {
         recommendations={recommendations}
         selections={selections}
         suggestions={suggestions}
+        selectMode={run.select.mode}
         onCopy={handleCopy}
         delimiter={delimiter}
         onBackToMatches={goTo('matches', 2)}

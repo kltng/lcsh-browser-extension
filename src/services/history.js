@@ -95,13 +95,25 @@ const selectionOf = (s) => ({
   mainHeadingOnly: s.mainHeadingOnly === true, droppedSubdivisions: arr(s.droppedSubdivisions).filter((d) => typeof d === 'string')
 });
 
-const marcOf = (m) => ({
-  status: pick(m.status, ['from-authority', 'unavailable'], 'unavailable'),
-  tag: strOrNull(m.tag), ind1: strOrNull(m.ind1), ind2: strOrNull(m.ind2),
-  subfields: arr(m.subfields).filter((sf) => Array.isArray(sf) && sf.length === 2 && sf.every((x) => typeof x === 'string'))
-    .map(([code, value]) => [code, value]),
-  text: strOrNull(m.text), reason: strOrNull(m.reason)
-});
+const isStringPair = (sf) => Array.isArray(sf) && sf.length === 2 && sf.every((x) => typeof x === 'string');
+
+const marcOf = (m) => {
+  const subfields = arr(m.subfields).filter(isStringPair).map(([code, value]) => [code, value]);
+  const status = pick(m.status, ['from-authority', 'unavailable'], 'unavailable');
+  // ui-2b item 5: evidence that the saved structure was malformed or had to
+  // be filtered, so the formatter never rebuilds a field from what is left.
+  const malformed = status === 'from-authority' && (
+    !Array.isArray(m.subfields) || subfields.length !== m.subfields.length
+    || [m.tag, m.ind1, m.ind2].some((x) => typeof x !== 'string')
+  );
+  return {
+    status,
+    tag: strOrNull(m.tag), ind1: strOrNull(m.ind1), ind2: strOrNull(m.ind2),
+    subfields,
+    text: strOrNull(m.text), reason: strOrNull(m.reason),
+    ...(malformed || m.structureMalformed === true ? { structureMalformed: true } : {})
+  };
+};
 
 /**
  * A saved suggestion's authorship: missing → 'ai' (entries saved before

@@ -71,7 +71,7 @@ describe('[P4 row15] honesty: step components', () => {
     expect(text).toContain('Lookup failed: Could not reach id.loc.gov. Check your connection.');
     expect(text).toContain('Retry lookup');
     // SPEC-UI2 §6: the AI's 85 is shown as a level, the number stays in the tooltip.
-    expect(text).toContain('AI choice AI confidence: High');
+    expect(text).toContain('AI choice · confidence High');
     expect(html).toContain('data-confidence="85"');
     expect(text).toContain('Your choice');
     expect(text).toContain('You chose none');
@@ -123,7 +123,7 @@ describe('[P4 row15] honesty: step components', () => {
     expect(text).toContain('MARC field (text form):');
     expect(text).toContain('650 _0 $a Motion pictures $z Japan $x History');
     // SPEC-UI2 §6: the additional pick's 45 is shown as its own level.
-    expect(text).toContain('Additional AI pick AI confidence: Low');
+    expect(text).toContain('Additional AI pick · confidence Low');
     expect(html).toContain('data-confidence="45"');
     expect(text).toContain('Suggestions without an LC heading');
     expect(text).toContain('Japanese cinema (AI suggestion)');

@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Box, Container, Paper, Typography, Stepper, Step, StepLabel, Button, Alert
 } from '@mui/material';
@@ -19,6 +19,34 @@ export const SETTINGS_HASH = '#settings';
 const STEP_VIEWS = [BibliographicInfoForm, InitialSuggestions, ScrapedResults, FinalRecommendations];
 
 /**
+ * Listen to browser-driven hash changes (#settings typed, Back/Forward).
+ * ui-2b item 2: the listener ends every Next ownership SYNCHRONOUSLY, in the
+ * event itself, before the new hash reaches React state and an effect.
+ * @param {EventTarget & {location:{hash:string}}} win - The window
+ * @param {{onHash:(hash:string)=>void, noteNavigation:()=>void}} handlers - New hash, navigation note
+ * @returns {()=>void} - Stop listening
+ */
+export const installHashRoute = (win, { onHash, noteNavigation }) => {
+  const handleHashChange = () => {
+    noteNavigation();
+    onHash(win.location.hash);
+  };
+  win.addEventListener('hashchange', handleHashChange);
+  return () => win.removeEventListener('hashchange', handleHashChange);
+};
+
+/**
+ * The location hash as React state, for app.jsx (inside the AppProvider).
+ * @returns {string}
+ */
+export const useHashRoute = () => {
+  const { noteNavigation = () => {} } = useAppContext();
+  const [hash, setHash] = useState(() => window.location.hash);
+  useEffect(() => installHashRoute(window, { onHash: setHash, noteNavigation }), []);
+  return hash;
+};
+
+/**
  * The app frame: the title, the Settings and History buttons, and the 4-step
  * workflow. Settings (`#settings`) and History open OVER the workflow, which
  * stays mounted and keeps its state; opening them leaves no workflow step.
@@ -30,8 +58,13 @@ const AppShell = ({ hash, onNavigate }) => {
     activeStep, settingsStatus, settingsError, historyOpen, openHistory, noteNavigation = () => {}
   } = useAppContext();
   const showSettings = hash === SETTINGS_HASH;
-  // Opening or closing Settings is a navigation too (SPEC-UI2 §1).
+  // Opening or closing Settings is a navigation too (SPEC-UI2 §1). It is noted
+  // when REQUESTED (ui-2b item 2); this effect stays as a second line of defence.
   useEffect(() => { noteNavigation(); }, [showSettings]);
+  const navigate = (next) => {
+    noteNavigation();
+    onNavigate(next);
+  };
   const showHistory = historyOpen && !showSettings;
   const StepView = STEP_VIEWS[activeStep] || BibliographicInfoForm;
 
@@ -51,7 +84,7 @@ const AppShell = ({ hash, onNavigate }) => {
                 </Button>
               )}
               {!showSettings && (
-                <Button variant="outlined" startIcon={<SettingsIcon />} onClick={() => onNavigate('settings')}>
+                <Button variant="outlined" startIcon={<SettingsIcon />} onClick={() => navigate('settings')}>
                   Settings
                 </Button>
               )}
@@ -64,7 +97,7 @@ const AppShell = ({ hash, onNavigate }) => {
             </Alert>
           )}
 
-          {showSettings && <SettingsPage onClose={() => onNavigate('')} />}
+          {showSettings && <SettingsPage onClose={() => navigate('')} />}
           {showHistory && <ConversationHistory />}
 
           {/* The workflow stays mounted while Settings or History is open, so no step loses its state */}

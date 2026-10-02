@@ -218,9 +218,11 @@ describe('[UI1 item 5] the Matches summary and less repetition', () => {
     const text = textOf(html);
     // s1: one line with the heading, the chosen LC label, "Exact match" and an expand control.
     // Heading, arrow, chosen label, then the class and the expand control, in one run.
-    const line = text.indexOf('Cats → Cats ');
+    // ui-2b item 4: the collapsed line also keeps the authorship, the method and the confidence.
+    const start = 'Cats (AI suggestion · topical) → Cats ';
+    const line = text.indexOf(start);
     expect(line).toBeGreaterThan(-1);
-    expect(text.indexOf('Exact match Show details', line)).toBe(line + 'Cats → Cats '.length);
+    expect(text.indexOf('Exact match AI choice · confidence High Show details', line)).toBe(line + start.length);
     expect((text.match(/Show details/g) || [])).toHaveLength(1);
     // The other cards are expanded: their "Current choice" lines are shown (s2 only has candidates).
     expect(text.match(/Current choice:/g)).toHaveLength(1);

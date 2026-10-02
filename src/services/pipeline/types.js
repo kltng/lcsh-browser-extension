@@ -91,8 +91,10 @@ export const makeSuggestion = ({ id, heading, kind = 'unknown', reason = '', sou
   heading: String(heading),
   kind: KINDS.includes(kind) ? kind : 'unknown',
   reason: isStr(reason) ? reason : '',
-  // Newly generated suggestions are AI-authored; only an explicit 'user' is user-authored.
-  source: source === 'user' ? 'user' : 'ai'
+  // A missing source is AI (newly generated suggestions). An explicit
+  // unsupported value is never turned into known authorship: it stays
+  // 'unknown' and is shown with the neutral label "Suggestion".
+  source: SUGGESTION_SOURCES.includes(source) ? source : 'unknown'
 });
 
 /**

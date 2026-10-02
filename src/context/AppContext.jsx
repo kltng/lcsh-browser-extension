@@ -59,7 +59,9 @@ export const loadActiveConfig = async () => {
  * created in app.jsx above the hash routes. The popup passes nothing, so it
  * never takes ownership.
  */
-export const AppProvider = ({ children, localDbClient = null, localDbUpdates = null, initialHistoryOpen = false }) => {
+export const AppProvider = ({
+  children, localDbClient = null, localDbUpdates = null, initialHistoryOpen = false, workflowDeps = null
+}) => {
   const [bibliographicInfo, setBibliographicInfo] = useState(EMPTY_BIBLIOGRAPHIC_INFO);
 
   // State for system prompt: the editor text, the stored value it was loaded from, and a stale flag
@@ -81,7 +83,10 @@ export const AppProvider = ({ children, localDbClient = null, localDbUpdates = n
 
   // The pipeline run (run.js state behind the workflow controller)
   const workflowRef = useRef(null);
-  if (!workflowRef.current) workflowRef.current = createWorkflow({ loadConfig: loadActiveConfig, localClient: localDbClient });
+  // `workflowDeps` lets a test give the REAL provider wiring a fake AI and lookup backend.
+  if (!workflowRef.current) {
+    workflowRef.current = createWorkflow({ loadConfig: loadActiveConfig, localClient: localDbClient, ...(workflowDeps || {}) });
+  }
   const workflow = workflowRef.current;
   // The third argument (the server snapshot) is the same state; the app is
   // client-rendered, and it lets a test render this provider with react-dom/server.

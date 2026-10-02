@@ -203,7 +203,7 @@ describe('[UI2 §6] AI confidence', () => {
 
   it('the badge appears only for AI selections with a valid value, keyboard-focusable with its tooltip', () => {
     const html = renderHtml(ConfidenceBadge, { method: 'ai', confidence: 80 });
-    expect(textOf(html)).toContain('AI confidence: High');
+    expect(textOf(html)).toContain('· confidence High');
     expect(html).toContain('tabindex="0"');
     expect(html).toContain('data-confidence="80"');
     expect(html).toContain('The AI’s own estimate (0–100): 80');
@@ -215,9 +215,9 @@ describe('[UI2 §6] AI confidence', () => {
   it('each selection keeps its own confidence (never aggregated); numbers stay in history and CSV', () => {
     const run = builtRun();
     const text = textOf(renderHtml(RecommendationsPanel, { recommendations: run.recommendations, selections: selectionsOf(run), suggestions: run.suggest.suggestions }));
-    expect(text).toContain('AI choice AI confidence: High');
-    expect(text).toContain('Additional AI pick AI confidence: Low');
-    expect(text).not.toContain('AI confidence: Medium');
+    expect(text).toContain('AI choice · confidence High');
+    expect(text).toContain('Additional AI pick · confidence Low');
+    expect(text).not.toContain('confidence Medium');
     const entry = buildHistoryEntry({ run, id: 'e5', timestamp: 't' });
     expect(entry.recommendations.flatMap((r) => r.selections.map((s) => s.confidence))).toContain(85);
     const rows = csvRows(run.recommendations, selectionsOf(run), { suggestions: run.suggest.suggestions });

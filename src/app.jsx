@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { CssBaseline, ThemeProvider } from '@mui/material';
 import appTheme from './theme';
@@ -6,7 +6,8 @@ import { AppProvider } from './context/AppContext';
 import { createLocalDbClient } from './services/localdb/client';
 import { createUpdateChecker } from './services/localdb/pointer';
 import { localDbUpdateCheck, getSettings } from './services/settings';
-import AppShell from './components/AppShell';
+// The hash route (#settings opens the Settings screen) notes a navigation in the event itself.
+import AppShell, { useHashRoute } from './components/AppShell';
 
 // SPEC-UI2 §11, §12: the shared theme (the popup uses it too)
 const theme = appTheme;
@@ -41,19 +42,6 @@ const localDbUpdates = createUpdateChecker({
 getSettings()
   .then((settings) => localDbUpdates.checkOnOpen(settings.localDb))
   .catch(() => {});
-
-// Track the location hash, so #settings opens the Settings screen
-const useHashRoute = () => {
-  const [hash, setHash] = useState(window.location.hash);
-
-  useEffect(() => {
-    const handleHashChange = () => setHash(window.location.hash);
-    window.addEventListener('hashchange', handleHashChange);
-    return () => window.removeEventListener('hashchange', handleHashChange);
-  }, []);
-
-  return hash;
-};
 
 // Main App component: the frame lives in AppShell (testable without this entry file)
 const App = () => {

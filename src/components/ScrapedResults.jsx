@@ -110,9 +110,14 @@ const SuggestionCard = ({
       <Card variant="outlined" sx={{ mb: 2 }} id={`match-card-${s.id}`} tabIndex={-1}>
         <CardContent sx={{ py: 1, '&:last-child': { pb: 1 } }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
-            <Typography variant="subtitle1">{headingReplacement !== null ? headingReplacement : s.heading}</Typography>
+            {/* ui-2b item 4: the collapsed line keeps the authorship, the method and the AI confidence. */}
+            <Typography variant="subtitle1">{headingLine}</Typography>
             <Typography variant="body2" color="text.secondary">→ {chosen.label}</Typography>
             <Chip size="small" variant="outlined" label={matchClassLabel(chosen.matchClass)} />
+            <Typography variant="body2">
+              {choiceText(selection, { mode, hasManual: Object.hasOwn(manual, s.id) })}
+              <ConfidenceBadge method={selection?.method} confidence={selection?.confidence} />
+            </Typography>
             <Box sx={{ flex: 1 }} />
             <Button size="small" onClick={() => setUserExpanded(true)} aria-expanded="false">Show details</Button>
           </Box>
@@ -247,7 +252,8 @@ export const buildAndShowRecommendations = (workflow, setActiveStep) => {
 
 const ScrapedResults = () => {
   const {
-    run, workflow, setActiveStep, localDbClient, viewEpoch = () => 0, focusRequest = null, clearFocusRequest = () => {}
+    run, workflow, setActiveStep, localDbClient, viewEpoch = () => 0, focusRequest = null, clearFocusRequest = () => {},
+    noteNavigation = () => {}
   } = useAppContext();
   const [notice, setNotice] = useState(null);
   const [focusNotice, setFocusNotice] = useState(null);
@@ -281,7 +287,11 @@ const ScrapedResults = () => {
     return () => { alive = false; };
   }, [localDbClient, run.run.runId]);
 
-  const handleSettings = () => { window.location.hash = 'settings'; };
+  // ui-2b item 2: a navigation ends the Next ownership AT ONCE, before the hash change is handled.
+  const handleSettings = () => {
+    noteNavigation();
+    window.location.hash = 'settings';
+  };
   const advance = () => setActiveStep(3);
   // The Next continuation owns the Matches view only while no navigation happened.
   const handleNext = () => {

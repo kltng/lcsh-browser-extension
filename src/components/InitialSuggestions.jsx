@@ -6,11 +6,38 @@ import { useAppContext } from '../context/AppContext';
 import { TEXT_FALLBACK_NOTICE, MAX_SUGGESTIONS } from '../services/pipeline/suggest';
 import { EDITABLE_KINDS, KIND_LABELS } from '../services/pipeline/suggestionEdits';
 import { SUGGESTION_NOTE, SUGGESTIONS_HEADING, DOWNSTREAM_WARNING, authorLabel } from './pipelineText';
-import { shownText } from '../services/keyGuard';
+import { shownText, LOADING_TEXT } from '../services/keyGuard';
 import { useKnownKeys, KeysUnavailableNotice } from './useKnownKeys';
 
 /** The kinds the editor offers for one suggestion (`unknown` only if it already has it). */
 const kindOptions = (current) => (current === 'unknown' ? ['unknown', ...EDITABLE_KINDS] : EDITABLE_KINDS);
+
+/** Shown in the editor of a heading the key guard hides (ui-2b item 1). */
+export const HIDDEN_HEADING_NOTE = 'The original text is hidden because it repeats an API key.';
+/** The same, while the saved keys are still loading (the list shows "Loading…"). */
+export const LOADING_HEADING_NOTE = 'The original text is hidden until your saved settings have loaded.';
+
+/**
+ * Whether the key guard hides this heading in the list (hidden, or "Loading…"
+ * while the keys are not known yet).
+ * @param {string} heading - The stored heading
+ * @returns {boolean}
+ */
+export const isHeadingHidden = (heading) => shownText(heading) !== heading;
+
+/**
+ * The value shown in the editor input. The stored text of a hidden heading
+ * never appears there, also when it becomes hidden while the editor is open;
+ * a replacement text (hidden / "Loading…") is never used as a value.
+ * @param {string|null} draft - What the user typed, or null when untouched
+ * @param {string} heading - The stored heading
+ * @param {boolean} hidden - isHeadingHidden(heading) now
+ * @returns {string}
+ */
+export const editorHeadingValue = (draft, heading, hidden) => {
+  const value = draft ?? heading;
+  return hidden && value === heading ? '' : value;
+};
 
 /**
  * The draft editor of ONE suggestion (SPEC-UI2 §2). Opening or cancelling it
@@ -19,19 +46,32 @@ const kindOptions = (current) => (current === 'unknown' ? ['unknown', ...EDITABL
  * @returns {JSX.Element}
  */
 const SuggestionEditor = ({ suggestion, onApply, onCancel, showWarning }) => {
-  const [heading, setHeading] = useState(suggestion.heading);
+  // ui-2b item 1: the editor input is a display exit too. It follows the key
+  // registry (re-rendered when the keys change).
+  useKnownKeys();
+  const hidden = isHeadingHidden(suggestion.heading);
+  // null = the user has not typed; the draft then starts from the heading,
+  // unless that heading is hidden, when it starts EMPTY.
+  const [draft, setDraft] = useState(() => (hidden ? '' : null));
+  const heading = editorHeadingValue(draft, suggestion.heading, hidden);
   const [kind, setKind] = useState(suggestion.kind);
   const [error, setError] = useState(null);
   const apply = () => {
+    // The replacement text is never sent: a hidden heading needs new text.
     const result = onApply({ type: 'edit', id: suggestion.id, heading, kind });
     if (result?.ok === false) setError(result.error);
   };
   return (
     <Box sx={{ width: '100%' }}>
       {showWarning && <Alert severity="warning" sx={{ mb: 1 }}>{DOWNSTREAM_WARNING}</Alert>}
+      {hidden && (
+        <Alert severity="info" sx={{ mb: 1 }}>
+          {shownText(suggestion.heading) === LOADING_TEXT ? LOADING_HEADING_NOTE : HIDDEN_HEADING_NOTE}
+        </Alert>
+      )}
       <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ alignItems: { sm: 'flex-start' } }}>
         <TextField
-          size="small" fullWidth label="Search heading" value={heading} onChange={(e) => { setHeading(e.target.value); setError(null); }}
+          size="small" fullWidth label="Search heading" value={heading} onChange={(e) => { setDraft(e.target.value); setError(null); }}
           error={Boolean(error)} helperText={error || ' '} inputProps={{ 'aria-label': 'Search heading' }}
         />
         <TextField select size="small" label="Kind" value={kind} onChange={(e) => setKind(e.target.value)} sx={{ minWidth: 160 }}>

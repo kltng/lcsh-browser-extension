@@ -80,7 +80,10 @@ export const V2EntryView = ({ entry }) => {
         />
       </Section>
       <Section title="Recommendations">
-        <RecommendationsPanel recommendations={view.recommendations} selections={view.selections} suggestions={view.suggest.suggestions} />
+        <RecommendationsPanel
+          recommendations={view.recommendations} selections={view.selections} suggestions={view.suggest.suggestions}
+          selectMode={view.selectMode}
+        />
       </Section>
     </Box>
   );
