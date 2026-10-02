@@ -9,16 +9,20 @@ Plan: `docs/multi_agent/PLAN.md`.
 
 ## Team roster
 
+`$ACCOUNT_A_DIR` and `$ACCOUNT_B_DIR` stand for the two Claude Code config
+folders on the lead's machine (account A = main coder, account B = backup).
+Their real paths are in the owner's private instructions, not in this repo.
+
 | Role | Agent/CLI | Model | Invocation (smoke-tested 2026-09-26) |
 |---|---|---|---|
 | Tech lead | this Claude session | the session's own model | — |
-| Coder | `claude -p` | `opus` (alias) | `CLAUDE_CONFIG_DIR=$HOME/.claude-work claude -p "Read and follow the instructions in <ABS prompt path>" --model opus --permission-mode acceptEdits --allowedTools <list> --output-format json < /dev/null > <result.json>` |
-| Backup coder | `claude -p` | `opus` (alias) | same, but with `CLAUDE_CONFIG_DIR=$HOME/.claude` set explicitly (account B) |
+| Coder | `claude -p` | `opus` (alias) | `CLAUDE_CONFIG_DIR=$ACCOUNT_A_DIR claude -p "Read and follow the instructions in <ABS prompt path>" --model opus --permission-mode acceptEdits --allowedTools <list> --output-format json < /dev/null > <result.json>` |
+| Backup coder | `claude -p` | `opus` (alias) | same, but with `CLAUDE_CONFIG_DIR=$ACCOUNT_B_DIR` set explicitly (account B) |
 | Strict reviewer | `codex exec` 0.157.1 (npm `@openai/codex`; the brew formula is stale at 0.46.0 and cannot run the model) | `gpt-6-astra`, reasoning medium | `codex exec --sandbox read-only --ignore-user-config --disable apps --disable browser_use --disable computer_use --disable image_generation -m gpt-6-astra -c model_reasoning_effort="medium" -C <repo> -o <last_message.md> - < <prompt.md> > <output.log> 2>&1` |
 | QC | lead-run scripts | — | — |
 
 Account trap: with `CLAUDE_CONFIG_DIR` unset, `claude` is the account A
-account. With `CLAUDE_CONFIG_DIR=$HOME/.claude` set explicitly, it is
+account. With `CLAUDE_CONFIG_DIR=$ACCOUNT_B_DIR` set explicitly, it is
 account B. Before EVERY dispatch, run `claude auth status` with the exact same
 environment and write the email in the journal (field report #91).
 
@@ -92,8 +96,8 @@ tests) → live pass in Chrome → commit + push at the phase gate.
 
 | Agent | Session artifacts | Notes |
 |---|---|---|
-| Coder (account A) | `~/.claude-work/projects/-Users-<user>-work-lcsh-browser-extension/*.jsonl` | Different from the lead's dir, so there is no self-observation |
-| Backup coder (account B) | `~/.claude/projects/-Users-<user>-work-lcsh-browser-extension/*.jsonl` | SHARED with the lead's session. Map the coder to the jsonl that greps its prompt filename (field report #94) |
+| Coder (account A) | `$ACCOUNT_A_DIR/projects/-Users-<user>-work-lcsh-browser-extension/*.jsonl` | Different from the lead's dir, so there is no self-observation |
+| Backup coder (account B) | `$ACCOUNT_B_DIR/projects/-Users-<user>-work-lcsh-browser-extension/*.jsonl` | SHARED with the lead's session. Map the coder to the jsonl that greps its prompt filename (field report #94) |
 | Reviewer | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` | Check the `"model":` field for gpt-6-astra |
 
 ## Gate requirements

@@ -33,11 +33,11 @@ Make the extension work like `kltng/lcsh-pwa`:
 | Role | Agent | How it runs |
 |---|---|---|
 | Tech lead | Claude (this session) | Plans, writes specs, dispatches, verifies, runs builds and ops. Writes no product code. |
-| Coder | Opus 5.5 | `claude -p` headless, `--model claude-opus-5-5`, `CLAUDE_CONFIG_DIR=$HOME/.claude-work` (account A) |
+| Coder | Opus 5.5 | `claude -p` headless, `--model claude-opus-5-5`, `CLAUDE_CONFIG_DIR=$ACCOUNT_A_DIR` (account A) |
 | Reviewer | gpt-6-astra, medium reasoning | `codex exec --sandbox read-only --ignore-user-config --disable apps -m gpt-6-astra -c model_reasoning_effort="medium"` |
 
 Fallbacks:
-- Coder: account B account, explicit `CLAUDE_CONFIG_DIR=$HOME/.claude`.
+- Coder: account B account, explicit `CLAUDE_CONFIG_DIR=$ACCOUNT_B_DIR`.
 - Reviewer: Opus 5.5 in read-only mode. This is NOT independent (same vendor
   as the coder), so an independent spot-check follows once codex is back.
 
@@ -89,8 +89,8 @@ Fallbacks:
   download it again. Phase 1 tries an APFS clone copy (`cp -c`, uses no
   extra disk) of the model folder into the test profile.
 - **Claude accounts:** with `CLAUDE_CONFIG_DIR` unset, `claude` is account A;
-  with `CLAUDE_CONFIG_DIR=$HOME/.claude` set explicitly, it is account B. Main
-  coder = `~/.claude-work` (account A). Backup coder = explicit `~/.claude`
+  with `CLAUDE_CONFIG_DIR=$ACCOUNT_B_DIR` set explicitly, it is account B. Main
+  coder = `$ACCOUNT_A_DIR` (account A). Backup coder = explicit `$ACCOUNT_B_DIR`
   (account B). Check `auth status` right before every dispatch.
 - **This Mac has 31 GB free disk.** That is tight for building the
   databases and testing Nano. See Risks.
@@ -235,7 +235,7 @@ Owner decisions 2026-09-26: rebuild from LOC source (not from the old
 4. HF: publishing is approved; the server token (kltng, write) is used for
    the first upload.
 5. Fallbacks: backup coder = account B account (explicit
-   `CLAUDE_CONFIG_DIR=$HOME/.claude`). Reviewer = codex; no fallback needed
+   `CLAUDE_CONFIG_DIR=$ACCOUNT_B_DIR`). Reviewer = codex; no fallback needed
    unless it fails.
 
 ## Risks
