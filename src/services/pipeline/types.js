@@ -78,16 +78,21 @@ export const NONE_REASON_WORDS = {
 const isStr = (v) => typeof v === 'string';
 const isIntIn = (v, lo, hi) => Number.isInteger(v) && v >= lo && v <= hi;
 
+/** SPEC-UI2 §2: who wrote a suggestion's text. */
+export const SUGGESTION_SOURCES = ['ai', 'user'];
+
 /**
  * Build a Suggestion.
- * @param {{id:string, heading:string, kind?:string, reason?:string}} parts - Fields
+ * @param {{id:string, heading:string, kind?:string, reason?:string, source?:'ai'|'user'}} parts - Fields
  * @returns {Suggestion}
  */
-export const makeSuggestion = ({ id, heading, kind = 'unknown', reason = '' }) => ({
+export const makeSuggestion = ({ id, heading, kind = 'unknown', reason = '', source = 'ai' }) => ({
   id: String(id),
   heading: String(heading),
   kind: KINDS.includes(kind) ? kind : 'unknown',
-  reason: isStr(reason) ? reason : ''
+  reason: isStr(reason) ? reason : '',
+  // Newly generated suggestions are AI-authored; only an explicit 'user' is user-authored.
+  source: source === 'user' ? 'user' : 'ai'
 });
 
 /**

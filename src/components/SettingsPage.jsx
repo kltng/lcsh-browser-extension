@@ -9,10 +9,21 @@ import {
   ListItemText,
   Paper,
   CircularProgress,
-  Divider
+  Divider,
+  Tooltip,
+  FormControl,
+  FormLabel,
+  RadioGroup,
+  FormControlLabel,
+  Radio
 } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
-import { getSettings, onSettingsChanged } from '../services/settings';
+import { getSettings, onSettingsChanged, setSubfieldDelimiter } from '../services/settings';
+import { nanoAvailability, TEXT_OPTS } from '../services/providers/geminiNano';
+import {
+  isProviderConfigured, isNanoAvailable, CONFIGURED_LABEL, CONFIGURED_TOOLTIP, NANO_AVAILABLE_LABEL
+} from './providerStatus';
+import { useSubfieldDelimiter } from './useSubfieldDelimiter';
 import LocalDbPanel from './LocalDbSettings';
 import { PROVIDERS } from '../services/providers/registry';
 import ProviderSettings from './ProviderSettings';
@@ -30,6 +41,14 @@ const SettingsPage = ({ onClose }) => {
   const [settings, setSettings] = useState(null);
   const [loadError, setLoadError] = useState(null);
   const [selectedId, setSelectedId] = useState(null);
+  // SPEC-UI2 §7: Nano's availability, read with availability() only — no
+  // session is created and no download is started.
+  const [nanoAvailabilityResult, setNanoAvailability] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    nanoAvailability(TEXT_OPTS).then((result) => { if (alive) setNanoAvailability(result); }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -70,7 +89,12 @@ const SettingsPage = ({ onClose }) => {
             {PROVIDERS.map((p) => (
               <ListItemButton key={p.id} selected={p.id === entry.id} onClick={() => setSelectedId(p.id)}>
                 <ListItemText
-                  primary={p.name}
+                  primary={(
+                    <Box component="span" sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                      {p.name}
+                      <ProviderMark entry={p} stored={settings.providers[p.id]} nanoAvailability={nanoAvailabilityResult} />
+                    </Box>
+                  )}
                   secondary={p.id === settings.activeProviderId ? 'In use' : null}
                 />
               </ListItemButton>
@@ -104,8 +128,54 @@ const SettingsPage = ({ onClose }) => {
       </Box>
       <SettingsSection title="AI provider">{providerSection()}</SettingsSection>
       <SettingsSection title="Lookup source and offline database"><LocalDbPanel /></SettingsSection>
+      <SettingsSection title="Output"><OutputSettings /></SettingsSection>
       <SettingsSection title="Selection rules (advanced)"><SystemPromptEditor /></SettingsSection>
     </Box>
+  );
+};
+
+/**
+ * The ✓ "Configured" / Nano "Available" mark of one provider (SPEC-UI2 §7).
+ * @param {{entry:object, stored:object, nanoAvailability:any}} props - Entry, saved value, Nano result
+ * @returns {JSX.Element|null}
+ */
+export const ProviderMark = ({ entry, stored, nanoAvailability: availability }) => {
+  if (entry.adapter === 'chrome-nano') {
+    return isNanoAvailable(availability)
+      ? <Typography component="span" variant="caption" color="success.dark">{NANO_AVAILABLE_LABEL}</Typography>
+      : null;
+  }
+  if (!isProviderConfigured(entry, stored)) return null;
+  return (
+    <Tooltip title={CONFIGURED_TOOLTIP} describeChild>
+      <Typography component="span" variant="body2" color="success.dark" role="img" aria-label={CONFIGURED_LABEL} tabIndex={0}>
+        ✓
+      </Typography>
+    </Tooltip>
+  );
+};
+
+/**
+ * Settings → Output (SPEC-UI2 §4): the subfield delimiter of MARC fields. It
+ * is saved on its own; open views follow it without a new lookup or selection.
+ * @returns {JSX.Element}
+ */
+export const OutputSettings = () => {
+  const delimiter = useSubfieldDelimiter();
+  const [error, setError] = useState(null);
+  const choose = (value) => {
+    setError(null);
+    setSubfieldDelimiter(value).catch(() => setError('The setting could not be saved.'));
+  };
+  return (
+    <FormControl>
+      <FormLabel id="subfield-delimiter-label">Subfield delimiter</FormLabel>
+      <RadioGroup row aria-labelledby="subfield-delimiter-label" value={delimiter} onChange={(e) => choose(e.target.value)}>
+        <FormControlLabel value="$" control={<Radio />} label="$ (default)" />
+        <FormControlLabel value="‡" control={<Radio />} label="‡" />
+      </RadioGroup>
+      {error && <Alert severity="error" sx={{ mt: 1 }}>{error}</Alert>}
+    </FormControl>
   );
 };
 

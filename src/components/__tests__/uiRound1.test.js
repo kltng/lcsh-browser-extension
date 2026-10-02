@@ -122,8 +122,9 @@ describe('[UI1 item 2] the Settings structure and the database section', () => {
     // UI round 1b: ONE title — the section heading; the editor itself is shown directly.
     expect(text.match(/selection rules \(advanced\)/gi)).toHaveLength(1);
     expect(text).not.toContain('LCSH Selection Rules (Advanced)');
-    expect(text).toContain('Save Rules');
-    expect(text).toContain('Reset to Default');
+    // SPEC-UI2 §12: the button labels are sentence case
+    expect(text).toContain('Save rules');
+    expect(text).toContain('Reset to default');
     expect(text).not.toContain('Settings: AI provider');
   });
 });
@@ -143,8 +144,9 @@ describe('[UI1 items 3 and 4] History is a view; the workflow has 4 steps', () =
     // The selection rules editor is no longer under the workflow (item 4); since
     // round 1b it has no title of its own, so its controls are what is checked.
     expect(text).not.toContain('LCSH Selection Rules (Advanced)');
-    expect(text).not.toContain('Save Rules');
-    expect(text).not.toContain('Reset to Default');
+    // SPEC-UI2 §12: the labels are sentence case now
+    expect(text).not.toMatch(/save rules/i);
+    expect(text).not.toMatch(/reset to default/i);
     expect(Object.keys(STEP_OPERATIONS)).toEqual(['0', '1', '2', '3']);
   });
 

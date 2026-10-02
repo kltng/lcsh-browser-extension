@@ -12,6 +12,7 @@ import {
   runViewOf, adaptLegacyEntry, legacyMarcCopyText, LEGACY_HEADER, LEGACY_MARC_LABEL, LEGACY_TEXT_LABEL
 } from '../services/history';
 import { getSimilarityColor } from '../utils/similarityUtils';
+import { CHIP_TEXT_ON_SCORE } from '../theme';
 import { guardExit, documentKeys, KeyEchoError, shownText } from '../services/keyGuard';
 import { useKnownKeys, KeysUnavailableNotice } from './useKnownKeys';
 import { SuggestionsPanel } from './InitialSuggestions';
@@ -66,7 +67,8 @@ export const V2EntryView = ({ entry }) => {
           {[formatProvenance('Suggestions', suggest), formatProvenance('Selection', select)].filter(Boolean).join(' · ')}
         </Typography>
       )}
-      <Section title="AI suggestions"><SuggestionsPanel suggest={view.suggest} /></Section>
+      {/* SPEC-UI2 §2: the list may mix AI and user headings */}
+      <Section title="Suggestions"><SuggestionsPanel suggest={view.suggest} /></Section>
       <Section title="Matches">
         <MatchesPanel
           suggestions={view.suggest.suggestions}
@@ -107,7 +109,7 @@ export const LegacyEntryView = ({ entry, onCopy }) => {
       {legacy.averageSimilarity !== null && (
         <Box sx={{ mt: 1 }}>
           <Typography variant="caption" color="text.secondary">Spelling score saved by the older version: </Typography>
-          <Chip size="small" label={`${legacy.averageSimilarity}%`} sx={{ bgcolor: getSimilarityColor(legacy.averageSimilarity), color: 'white' }} />
+          <Chip size="small" label={`${legacy.averageSimilarity}%`} sx={{ bgcolor: getSimilarityColor(legacy.averageSimilarity), color: CHIP_TEXT_ON_SCORE }} />
         </Box>
       )}
       <Section title={`Headings (older version, ${legacy.items.length})`}>
@@ -130,7 +132,7 @@ export const LegacyEntryView = ({ entry, onCopy }) => {
               )}
               {item.marc && (
                 <Box sx={{ mt: 0.5 }}>
-                  <Typography variant="caption" color="warning.main" component="div">{LEGACY_MARC_LABEL}</Typography>
+                  <Typography variant="caption" color="warning.dark" component="div">{LEGACY_MARC_LABEL}</Typography>
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                     <Typography variant="body2" sx={{ fontFamily: 'monospace', whiteSpace: 'pre-wrap' }}>{shownText(item.marc)}</Typography>
                     <IconButton size="small" aria-label="Copy unverified MARC" onClick={() => onCopy(legacyMarcCopyText(item.marc))}>
@@ -206,7 +208,7 @@ const ConversationHistory = () => {
         {header}
         <Box sx={{ textAlign: 'center', py: 4 }}>
           <Typography variant="h6" color="text.secondary">No history yet.</Typography>
-          <Button variant="contained" onClick={handleNewSearch} sx={{ mt: 2 }}>Start New Search</Button>
+          <Button variant="contained" onClick={handleNewSearch} sx={{ mt: 2 }}>Start new search</Button>
         </Box>
       </Box>
     );
@@ -218,8 +220,8 @@ const ConversationHistory = () => {
       <KeysUnavailableNotice />
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
       <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 3 }}>
-        <Button variant="contained" onClick={handleNewSearch}>Start New Search</Button>
-        <Button variant="outlined" color="error" startIcon={<DeleteIcon />} onClick={() => setClearOpen(true)}>Clear All History</Button>
+        <Button variant="contained" onClick={handleNewSearch}>Start new search</Button>
+        <Button variant="outlined" color="error" startIcon={<DeleteIcon />} onClick={() => setClearOpen(true)}>Clear all history</Button>
       </Box>
       <List>
         {conversationHistory.slice().reverse().map((entry) => (
@@ -252,11 +254,11 @@ const ConversationHistory = () => {
         </DialogActions>
       </Dialog>
       <Dialog open={clearOpen} onClose={() => setClearOpen(false)}>
-        <DialogTitle>Clear All History</DialogTitle>
+        <DialogTitle>Clear all history</DialogTitle>
         <DialogContent><DialogContentText>Clear the whole history? This cannot be undone.</DialogContentText></DialogContent>
         <DialogActions>
           <Button onClick={() => setClearOpen(false)}>Cancel</Button>
-          <Button onClick={confirmClear} color="error">Clear All</Button>
+          <Button onClick={confirmClear} color="error">Clear all</Button>
         </DialogActions>
       </Dialog>
       <Snackbar open={Boolean(snackbar)} autoHideDuration={3000} onClose={() => setSnackbar('')} message={snackbar} />

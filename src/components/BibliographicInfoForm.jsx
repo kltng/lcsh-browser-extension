@@ -13,15 +13,41 @@ import {
     Card,
     CardMedia,
     CardContent,
-    CardActions
+    CardActions,
+    Accordion,
+    AccordionSummary,
+    AccordionDetails
 } from '@mui/material';
-import { useAppContext } from '../context/AppContext';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import { useAppContext, EMPTY_BIBLIOGRAPHIC_INFO } from '../context/AppContext';
 import { describeActiveProvider } from '../services/pipeline/label';
 import { onSettingsChanged } from '../services/settings';
 import { createPreviewTracker } from './previewUrls';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import DeleteIcon from '@mui/icons-material/Delete';
 import ImageIcon from '@mui/icons-material/Image';
+
+/**
+ * Whether either optional field of the form contains text (SPEC-UI2 §8).
+ * @param {object} info - The form data
+ * @returns {boolean}
+ */
+export const hasMoreDetails = (info) => Boolean(info?.tableOfContents) || Boolean(info?.notes);
+
+/**
+ * The open state of "More details (optional)" after the form data changed.
+ * The user's own typing never changes it; "Start new search" (the empty form)
+ * closes it; an external replacement that supplies either field opens it.
+ * @param {boolean} open - The current state
+ * @param {object} info - The new form data
+ * @param {boolean} ownEdit - The change came from the user typing in the form
+ * @returns {boolean}
+ */
+export const nextMoreDetailsOpen = (open, info, ownEdit) => {
+  if (ownEdit) return open;
+  if (info === EMPTY_BIBLIOGRAPHIC_INFO) return false;
+  return hasMoreDetails(info) ? true : open;
+};
 
 const BibliographicInfoForm = () => {
     const {
@@ -65,11 +91,19 @@ const BibliographicInfoForm = () => {
     // Handle form input changes
     const handleInputChange = (e) => {
         const { name, value } = e.target;
-        setBibliographicInfo({
-            ...bibliographicInfo,
-            [name]: value
-        });
+        const next = { ...bibliographicInfo, [name]: value };
+        ownEditRef.current = next;
+        setBibliographicInfo(next);
     };
+
+    // SPEC-UI2 §8: "More details (optional)" starts open when either of its
+    // fields has text; an external replacement that supplies one opens it, and
+    // "Start new search" (the empty form) closes it. The user may toggle it.
+    const [moreOpen, setMoreOpen] = useState(() => hasMoreDetails(bibliographicInfo));
+    const ownEditRef = useRef(null);
+    useEffect(() => {
+      setMoreOpen((open) => nextMoreDetailsOpen(open, bibliographicInfo, bibliographicInfo === ownEditRef.current));
+    }, [bibliographicInfo]);
 
     // Handle file input change
     const handleFileChange = (e) => {
@@ -257,37 +291,47 @@ const BibliographicInfoForm = () => {
                 </Grid>
 
                 <Grid item xs={12}>
-                    <TextField
-                        fullWidth
-                        label="Table of Contents"
-                        name="tableOfContents"
-                        value={bibliographicInfo.tableOfContents}
-                        onChange={handleInputChange}
+                    <Accordion
+                        expanded={moreOpen}
+                        onChange={(event, expanded) => setMoreOpen(expanded)}
+                        disableGutters
                         variant="outlined"
-                        multiline
-                        rows={4}
-                        helperText="List of chapters or sections"
-                    />
-                </Grid>
-
-                <Grid item xs={12}>
-                    <TextField
-                        fullWidth
-                        label="Additional Notes"
-                        name="notes"
-                        value={bibliographicInfo.notes}
-                        onChange={handleInputChange}
-                        variant="outlined"
-                        multiline
-                        rows={4}
-                        helperText="Any other relevant information"
-                    />
+                    >
+                        <AccordionSummary expandIcon={<ExpandMoreIcon />} aria-controls="more-details-content" id="more-details-header">
+                            <Typography>More details (optional)</Typography>
+                        </AccordionSummary>
+                        <AccordionDetails id="more-details-content">
+                            <TextField
+                                fullWidth
+                                label="Table of contents"
+                                name="tableOfContents"
+                                value={bibliographicInfo.tableOfContents}
+                                onChange={handleInputChange}
+                                variant="outlined"
+                                multiline
+                                rows={4}
+                                helperText="List of chapters or sections"
+                                sx={{ mb: 2 }}
+                            />
+                            <TextField
+                                fullWidth
+                                label="Additional notes"
+                                name="notes"
+                                value={bibliographicInfo.notes}
+                                onChange={handleInputChange}
+                                variant="outlined"
+                                multiline
+                                rows={4}
+                                helperText="Any other relevant information"
+                            />
+                        </AccordionDetails>
+                    </Accordion>
                 </Grid>
 
                 <Grid item xs={12}>
                     <Box sx={{ mb: 2 }}>
                         <Typography variant="subtitle1" gutterBottom>
-                            Upload Images (PNG, JPEG)
+                            Upload images (PNG, JPEG)
                         </Typography>
                         <Typography variant="body2" color="text.secondary" gutterBottom>
                             You can upload images of book covers, title pages, or other bibliographic information.
@@ -308,7 +352,7 @@ const BibliographicInfoForm = () => {
                             onClick={handleUploadClick}
                             sx={{ mb: 2 }}
                         >
-                            Upload Images
+                            Upload images
                         </Button>
                     </Box>
 

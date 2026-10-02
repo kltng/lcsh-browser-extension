@@ -6,16 +6,20 @@ import { builtRun, C } from '../../../../test/pipelineFixtures';
 describe('[P4 row14] csv: the recommendation export', () => {
   it('columns, methods/confidence as JSON arrays aligned with selections, the subdivision note, the source', () => {
     const run = builtRun();
-    const rows = csvRows(run.recommendations, selectionsOf(run));
+    const rows = csvRows(run.recommendations, selectionsOf(run), { suggestions: run.suggest.suggestions });
     // P5 §9 adds `marc_reason` after `marc_status`.
-    expect(rows[0]).toEqual(['label', 'lc_id', 'uri', 'authority', 'marc_field', 'marc_status', 'marc_reason', 'methods', 'confidence', 'subdivision_note', 'source']);
+    // SPEC-UI2 §2: every existing column kept, `suggestion_sources` appended.
+    expect(rows[0]).toEqual(['label', 'lc_id', 'uri', 'authority', 'marc_field', 'marc_status', 'marc_reason', 'methods', 'confidence', 'subdivision_note', 'source', 'suggestion_sources']);
     expect(CSV_COLUMNS).toEqual(rows[0]);
     expect(rows[1]).toEqual([
       C.mpjh.label, 'sh2008108026', C.mpjh.uri, 'lcsh', '650 _0 $a Motion pictures $z Japan $x History', 'from-authority',
-      '', '["ai"]', '[85]', '', 'loc-api'
+      '', '["ai"]', '[85]', '', 'loc-api', '["ai"]'
     ]);
-    expect(rows[2].slice(7, 9)).toEqual(['["manual"]', '[null]']);
-    expect(rows[3].slice(7, 9)).toEqual(['["ai"]', '[45]']);
+    // SPEC-UI2 §3: MARC-tag order — the additional 650 pick before the 651 manual choice.
+    expect(rows[2].slice(7, 9)).toEqual(['["ai"]', '[45]']);
+    // An additional pick has no source suggestion: its authorship is null, never invented.
+    expect(rows[2][11]).toBe('[null]');
+    expect(rows[3].slice(7, 9)).toEqual(['["manual"]', '[null]']);
     expect(rows).toHaveLength(4);
     const csv = recommendationsCsv(run.recommendations, selectionsOf(run));
     expect(csv).toContain('"[""ai""]","[85]"');

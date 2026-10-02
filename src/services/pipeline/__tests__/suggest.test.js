@@ -28,7 +28,7 @@ describe('[P4 row3] suggest: JSON path', () => {
     expect(req.userText).toContain('Title: Cats of Japan');
     expect(result).toEqual({
       subjectAnalysis: 'A book about cats.',
-      suggestions: [{ id: 's1', heading: 'Cats--Japan', kind: 'topical', reason: 'Main topic.' }],
+      suggestions: [{ id: 's1', heading: 'Cats--Japan', kind: 'topical', reason: 'Main topic.', source: 'ai' }],
       suggestMode: 'json',
       provenance: { providerId: 'gemini', model: 'gemini-2.5-flash' }
     });
@@ -43,9 +43,9 @@ describe('[P4 row3] suggest: JSON path', () => {
       { heading: 'Motion pictures--Japan', kind: 'genre', reason: 'e' },
       { heading: '日本', kind: 'geographic', reason: 'f' }
     ])).toEqual([
-      { id: 's1', heading: 'Cats', kind: 'topical', reason: 'a' },
-      { id: 's2', heading: 'Motion pictures -- Japan', kind: 'topical', reason: 'd' },
-      { id: 's3', heading: '日本', kind: 'geographic', reason: 'f' }
+      { id: 's1', heading: 'Cats', kind: 'topical', reason: 'a', source: 'ai' },
+      { id: 's2', heading: 'Motion pictures -- Japan', kind: 'topical', reason: 'd', source: 'ai' },
+      { id: 's3', heading: '日本', kind: 'geographic', reason: 'f', source: 'ai' }
     ]);
   });
 
@@ -63,7 +63,7 @@ describe('[P4 row3] suggest: JSON path', () => {
     const body = bodyOf(fetchMock);
     expect(body.generationConfig).toMatchObject({ responseMimeType: 'application/json', temperature: 0.2 });
     expect(body.generationConfig.responseSchema.properties.suggestions.maxItems).toBe(8);
-    expect(result.suggestions).toEqual([{ id: 's1', heading: 'Cats', kind: 'topical', reason: 'Topic.' }]);
+    expect(result.suggestions).toEqual([{ id: 's1', heading: 'Cats', kind: 'topical', reason: 'Topic.', source: 'ai' }]);
     expect(JSON.stringify(result)).not.toContain(KEY);
   });
 });
@@ -87,9 +87,9 @@ describe('[P4 row3] suggest: disclosed text fallback', () => {
     expect(result).toEqual({
       subjectAnalysis: '',
       suggestions: [
-        { id: 's1', heading: 'Cats', kind: 'unknown', reason: '' },
-        { id: 's2', heading: 'Cats--Japan', kind: 'unknown', reason: '' },
-        { id: 's3', heading: 'Japan', kind: 'unknown', reason: '' }
+        { id: 's1', heading: 'Cats', kind: 'unknown', reason: '', source: 'ai' },
+        { id: 's2', heading: 'Cats--Japan', kind: 'unknown', reason: '', source: 'ai' },
+        { id: 's3', heading: 'Japan', kind: 'unknown', reason: '', source: 'ai' }
       ],
       suggestMode: 'text-fallback',
       provenance: { providerId: 'gemini', model: 'gemini-2.5-flash' }

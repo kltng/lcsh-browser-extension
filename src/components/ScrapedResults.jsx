@@ -3,15 +3,16 @@ import {
   Box, Typography, Button, Chip, Alert, Card, CardContent, Link, CircularProgress, Stack
 } from '@mui/material';
 import { useAppContext } from '../context/AppContext';
-import { selectionsOf } from '../services/pipeline/run';
+import { selectionsOf, lookupsComplete } from '../services/pipeline/run';
 import { FALLBACK_BANNER } from '../services/pipeline/select';
 import { fallbackNotice } from '../services/lookup/index';
 import { getSettings } from '../services/settings';
 import {
   outcomeLine, choiceText, authorityLabel, lcLink, sourceLine, viaNote, replacementNoteText,
-  matchClassLabel, similarityText, matchesSummary
+  matchClassLabel, similarityText, matchesSummary, authorLabel
 } from './pipelineText';
 import { shownText } from '../services/keyGuard';
+import ConfidenceBadge from './ConfidenceBadge';
 import { useKnownKeys, KeysUnavailableNotice } from './useKnownKeys';
 
 /**
@@ -89,7 +90,8 @@ const SuggestionCard = ({
   // The finished line, and the heading alone (a 1-character key matches only
   // a whole value). A replacement (hidden, or "Loading…" before the keys
   // have loaded) is shown instead of the whole line.
-  const line = `${s.heading} (AI suggestion · ${s.kind})`;
+  const author = authorLabel(s.source);
+  const line = `${s.heading} (${author} · ${s.kind})`;
   const lineShown = shownText(line);
   const headingShown = shownText(s.heading);
   const headingReplacement = lineShown !== line ? lineShown : (headingShown !== s.heading ? headingShown : null);
@@ -98,14 +100,14 @@ const SuggestionCard = ({
     : null;
   const headingLine = headingReplacement !== null ? headingReplacement : (
     <>
-      {s.heading} <Typography component="span" variant="caption" color="text.secondary">(AI suggestion · {s.kind})</Typography>
+      {s.heading} <Typography component="span" variant="caption" color="text.secondary">({author} · {s.kind})</Typography>
     </>
   );
 
   if (!expanded) {
     const chosen = candidates[0];
     return (
-      <Card variant="outlined" sx={{ mb: 2 }}>
+      <Card variant="outlined" sx={{ mb: 2 }} id={`match-card-${s.id}`} tabIndex={-1}>
         <CardContent sx={{ py: 1, '&:last-child': { pb: 1 } }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
             <Typography variant="subtitle1">{headingReplacement !== null ? headingReplacement : s.heading}</Typography>
@@ -120,7 +122,7 @@ const SuggestionCard = ({
   }
 
   return (
-    <Card variant="outlined" sx={{ mb: 2 }}>
+    <Card variant="outlined" sx={{ mb: 2 }} id={`match-card-${s.id}`} tabIndex={-1}>
       <CardContent>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <Typography variant="subtitle1">{headingLine}</Typography>
@@ -162,6 +164,7 @@ const SuggestionCard = ({
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1 }}>
             <Typography variant="body2">
               <strong>Current choice:</strong> {choiceText(selection, { mode, hasManual: Object.hasOwn(manual, s.id) })}
+              <ConfidenceBadge method={selection?.method} confidence={selection?.confidence} />
             </Typography>
             {!readOnly && <Button size="small" color="inherit" onClick={() => onChoose(s.id, null)}>Use none</Button>}
           </Box>
@@ -243,13 +246,32 @@ export const buildAndShowRecommendations = (workflow, setActiveStep) => {
 };
 
 const ScrapedResults = () => {
-  const { run, workflow, setActiveStep, localDbClient } = useAppContext();
+  const {
+    run, workflow, setActiveStep, localDbClient, viewEpoch = () => 0, focusRequest = null, clearFocusRequest = () => {}
+  } = useAppContext();
   const [notice, setNotice] = useState(null);
+  const [focusNotice, setFocusNotice] = useState(null);
   const suggestions = run.suggest?.suggestions || [];
   const selections = selectionsOf(run);
-  const lookingUp = Object.keys(run.lookup.pending).length > 0;
   const selecting = run.select.pending;
-  const canBuild = run.run.stage === 'selected' || run.run.stage === 'built';
+  // SPEC-UI2 §1: Next needs a completed lookup for every current suggestion,
+  // nothing pending, and at least one suggestion.
+  const canNext = lookupsComplete(run);
+  const selectionCompleted = Boolean(run.select.mode) && !selecting;
+
+  // "Back to Matches" (SPEC-UI2 §5): scroll to the card of that suggestion.
+  useEffect(() => {
+    if (!focusRequest || focusRequest.view !== 'matches') return;
+    clearFocusRequest();
+    const card = typeof document !== 'undefined' ? document.getElementById(`match-card-${focusRequest.suggestionId}`) : null;
+    if (card) {
+      card.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
+      card.focus?.();
+      setFocusNotice(null);
+    } else {
+      setFocusNotice('That suggestion is no longer in the list.');
+    }
+  }, [focusRequest]);
 
   useEffect(() => {
     let alive = true;
@@ -260,7 +282,12 @@ const ScrapedResults = () => {
   }, [localDbClient, run.run.runId]);
 
   const handleSettings = () => { window.location.hash = 'settings'; };
-  const handleBuild = () => buildAndShowRecommendations(workflow, setActiveStep);
+  const advance = () => setActiveStep(3);
+  // The Next continuation owns the Matches view only while no navigation happened.
+  const handleNext = () => {
+    const epoch = viewEpoch();
+    workflow.next({ onAdvance: advance, stillOwned: () => viewEpoch() === epoch });
+  };
 
   return (
     <Box>
@@ -268,14 +295,15 @@ const ScrapedResults = () => {
       <KeysUnavailableNotice />
       {/* A backend fallback is never silent (HOUSE_RULES 10). */}
       {notice && <Alert severity="info" sx={{ mb: 2 }}>{notice}</Alert>}
+      {focusNotice && <Alert severity="info" sx={{ mb: 2 }}>{focusNotice}</Alert>}
       {run.select.mode === 'exact-fallback' && <Alert severity="warning" sx={{ mb: 2 }}>{FALLBACK_BANNER}</Alert>}
       {run.select.error && (
         <Alert severity="error" sx={{ mb: 2 }}>
           {run.select.error.message}
           <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
-            <Button size="small" variant="outlined" onClick={() => workflow.select()}>Retry</Button>
+            <Button size="small" variant="outlined" onClick={handleNext}>Retry</Button>
             <Button size="small" variant="outlined" onClick={handleSettings}>Settings</Button>
-            <Button size="small" variant="outlined" onClick={() => workflow.continueWithoutAi()}>
+            <Button size="small" variant="outlined" onClick={() => workflow.continueWithoutAiAndAdvance({ onAdvance: advance })}>
               Continue without AI (exact matches only)
             </Button>
           </Stack>
@@ -292,14 +320,22 @@ const ScrapedResults = () => {
         onRetry={workflow.retryLookup}
         runId={run.run.runId}
       />
-      <Box sx={{ mt: 3, display: 'flex', justifyContent: 'space-between', gap: 2 }}>
+      <Box sx={{ mt: 3, display: 'flex', justifyContent: 'space-between', gap: 2, alignItems: 'center' }}>
         <Button variant="outlined" onClick={() => setActiveStep(1)}>Back</Button>
-        <Box sx={{ display: 'flex', gap: 2 }}>
-          <Button variant="outlined" onClick={() => workflow.select()} disabled={lookingUp || selecting}>
-            {selecting ? <><CircularProgress size={18} sx={{ mr: 1 }} />Choosing…</> : 'Choose headings'}
-          </Button>
-          <Button variant="contained" onClick={handleBuild} disabled={!canBuild || lookingUp || selecting}>
-            Build recommendations
+        <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
+          {selecting && (
+            <>
+              <Typography variant="body2" sx={{ display: 'flex', alignItems: 'center' }}>
+                <CircularProgress size={18} sx={{ mr: 1 }} />Choosing headings…
+              </Typography>
+              <Button onClick={() => workflow.cancelSelect()}>Cancel</Button>
+            </>
+          )}
+          {selectionCompleted && (
+            <Button variant="outlined" onClick={() => workflow.askAgain()}>Ask the AI again</Button>
+          )}
+          <Button variant="contained" onClick={handleNext} disabled={!canNext}>
+            Next: recommendations
           </Button>
         </Box>
       </Box>

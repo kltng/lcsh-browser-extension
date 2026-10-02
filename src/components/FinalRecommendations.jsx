@@ -1,18 +1,20 @@
 import React, { useState } from 'react';
 import {
   Box, Typography, Button, Chip, Alert, Card, CardContent, IconButton, Snackbar, Link, List, ListItem, ListItemText,
-  CircularProgress
+  CircularProgress, Stack
 } from '@mui/material';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import { useAppContext } from '../context/AppContext';
 import { selectionsOf } from '../services/pipeline/run';
 import { subdivisionNote } from '../services/pipeline/select';
-import { copyAllText, recommendationsCsv, marcUnavailableText } from '../services/pipeline/exports';
+import { copyAllText, recommendationsCsv, marcUnavailableText, marcTextOf } from '../services/pipeline/exports';
+import ConfidenceBadge from './ConfidenceBadge';
+import { useSubfieldDelimiter } from './useSubfieldDelimiter';
 import { NONE_REASON_WORDS } from '../services/pipeline/types';
 import { needsNameKey } from '../services/pipeline/nameKeys';
 import { KeyEchoError, shownText } from '../services/keyGuard';
 import { useKnownKeys, KeysUnavailableNotice } from './useKnownKeys';
-import { methodText, authorityLabel, lcLink, viaNote } from './pipelineText';
+import { methodText, authorityLabel, lcLink, viaNote, authorLabel } from './pipelineText';
 
 /**
  * Whether any recommendation is a local name whose MARC key is still missing
@@ -29,17 +31,23 @@ export const hasUnresolvedNameKeys = (recommendations = []) =>
  * @param {{recommendations:object[], selections:object[], suggestions:object[], onCopy?:Function}} props - Results
  * @returns {JSX.Element}
  */
-export const RecommendationsPanel = ({ recommendations, selections, suggestions, onCopy }) => {
+export const RecommendationsPanel = ({
+  recommendations, selections, suggestions, onCopy, onBackToMatches, onEditHeading, delimiter: fixedDelimiter
+}) => {
   // P6 fix 14: finished display strings are checked against the known keys,
   // and the view re-renders when those keys change.
   useKnownKeys();
+  // SPEC-UI2 §4: the saved delimiter, applied to display only.
+  const savedDelimiter = useSubfieldDelimiter();
+  const delimiter = fixedDelimiter ?? savedDelimiter;
   const withoutHeading = selections.filter((s) => !s.cid);
-  const headingOf = (id) => suggestions.find((s) => s.id === id)?.heading || id;
+  const suggestionOf = (id) => suggestions.find((s) => s.id === id);
   const withoutHeadingLine = (id) => {
-    const heading = headingOf(id);
+    const suggestion = suggestionOf(id);
+    const heading = suggestion?.heading || id;
     const shownHeading = shownText(heading);
     // The heading's own replacement (hidden, or "Loading…") wins; else the finished line's.
-    return shownHeading !== heading ? shownHeading : shownText(`${heading} (AI suggestion)`);
+    return shownHeading !== heading ? shownHeading : shownText(`${heading} (${authorLabel(suggestion?.source)})`);
   };
   return (
     <Box>
@@ -59,8 +67,15 @@ export const RecommendationsPanel = ({ recommendations, selections, suggestions,
               <Typography variant="body2" color="text.secondary">
                 LC ID: {rec.localId} · <Link href={lcLink(rec.uri)} target="_blank" rel="noopener noreferrer">{lcLink(rec.uri)}</Link>
               </Typography>
-              <Typography variant="body2" sx={{ mt: 0.5 }}>
-                {rec.selections.map((s) => methodText(s)).join(' · ')}
+              <Typography variant="body2" sx={{ mt: 0.5 }} component="div">
+                {/* One method per selection, each with its OWN confidence (never aggregated). */}
+                {rec.selections.map((s, i) => (
+                  <React.Fragment key={`${s.suggestionId ?? 'additional'}-${i}`}>
+                    {i > 0 && ' · '}
+                    {methodText(s)}
+                    <ConfidenceBadge method={s.method} confidence={s.confidence} />
+                  </React.Fragment>
+                ))}
               </Typography>
               {viaNote(rec) && (
                 <Typography variant="caption" color="text.secondary">{viaNote(rec)}</Typography>
@@ -68,9 +83,10 @@ export const RecommendationsPanel = ({ recommendations, selections, suggestions,
               {rec.marc.status === 'from-authority' ? (
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1 }}>
                   <Typography variant="caption" color="text.secondary">MARC field (text form):</Typography>
-                  <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>{rec.marc.text}</Typography>
+                  {/* The finished, delimiter-formatted text goes through the display guard. */}
+                  <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>{shownText(marcTextOf(rec, delimiter))}</Typography>
                   {onCopy && (
-                    <IconButton size="small" aria-label="Copy MARC field" onClick={() => onCopy(rec.marc.text)}>
+                    <IconButton size="small" aria-label="Copy MARC field" onClick={() => onCopy(marcTextOf(rec, delimiter))}>
                       <ContentCopyIcon fontSize="small" />
                     </IconButton>
                   )}
@@ -90,11 +106,19 @@ export const RecommendationsPanel = ({ recommendations, selections, suggestions,
           <Typography variant="subtitle1">Suggestions without an LC heading</Typography>
           <List dense>
             {withoutHeading.map((s) => (
-              <ListItem key={s.suggestionId} divider>
+              <ListItem key={s.suggestionId} divider sx={{ flexWrap: 'wrap' }}>
                 <ListItemText
                   primary={withoutHeadingLine(s.suggestionId)}
+                  // The actual reason (failed lookup, AI chose none, manual none, …), never generalized.
                   secondary={NONE_REASON_WORDS[s.noneReason] || 'no candidate was chosen'}
                 />
+                {/* SPEC-UI2 §5: live view only (history passes no callbacks). */}
+                {(onBackToMatches || onEditHeading) && (
+                  <Stack direction="row" spacing={1}>
+                    {onBackToMatches && <Button size="small" onClick={() => onBackToMatches(s.suggestionId)}>Back to Matches</Button>}
+                    {onEditHeading && <Button size="small" onClick={() => onEditHeading(s.suggestionId)}>Edit search heading</Button>}
+                  </Stack>
+                )}
               </ListItem>
             ))}
           </List>
@@ -106,13 +130,26 @@ export const RecommendationsPanel = ({ recommendations, selections, suggestions,
 
 const FinalRecommendations = () => {
   const {
-    run, workflow, setActiveStep, saveRunToHistory, openHistory = () => {}
+    run, workflow, setActiveStep, saveRunToHistory, openHistory = () => {}, requestFocus = () => {}
   } = useAppContext();
   const [snackbar, setSnackbar] = useState('');
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
   const recommendations = run.recommendations || [];
   const selections = selectionsOf(run);
+  const suggestions = run.suggest?.suggestions || [];
+  const delimiter = useSubfieldDelimiter();
+
+  // SPEC-UI2 §5: go to the target view and focus that suggestion. A missing
+  // target gives a local message and changes nothing.
+  const goTo = (view, step) => (suggestionId) => {
+    if (!suggestions.some((s) => s.id === suggestionId)) {
+      setSnackbar('That suggestion is no longer in the list.');
+      return;
+    }
+    requestFocus(view, suggestionId);
+    setActiveStep(step);
+  };
 
   // Exit (c), P6 fix 13: the FINAL text is checked before it leaves.
   const guardedText = (text) => {
@@ -132,7 +169,8 @@ const FinalRecommendations = () => {
   };
 
   const handleExportCsv = () => {
-    const csv = guardedText(recommendationsCsv(recommendations, selections));
+    // The fully serialized CSV (delimiter, formula guard, quoting, BOM, CRLF) is what the guard sees.
+    const csv = guardedText(recommendationsCsv(recommendations, selections, { suggestions, delimiter }));
     if (csv === null) return;
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
@@ -195,13 +233,16 @@ const FinalRecommendations = () => {
       <RecommendationsPanel
         recommendations={recommendations}
         selections={selections}
-        suggestions={run.suggest?.suggestions || []}
+        suggestions={suggestions}
         onCopy={handleCopy}
+        delimiter={delimiter}
+        onBackToMatches={goTo('matches', 2)}
+        onEditHeading={goTo('suggestions', 1)}
       />
       <Box sx={{ mt: 3, display: 'flex', justifyContent: 'space-between', gap: 2 }}>
         <Button variant="outlined" onClick={() => setActiveStep(2)}>Back</Button>
         <Box sx={{ display: 'flex', gap: 2 }}>
-          <Button variant="outlined" onClick={() => handleCopy(copyAllText(recommendations, selections))} disabled={recommendations.length === 0}>
+          <Button variant="outlined" onClick={() => handleCopy(copyAllText(recommendations, selections, { delimiter }))} disabled={recommendations.length === 0}>
             Copy all
           </Button>
           <Button variant="outlined" onClick={handleExportCsv} disabled={recommendations.length === 0}>Export CSV</Button>

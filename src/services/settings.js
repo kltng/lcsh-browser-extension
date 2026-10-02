@@ -10,6 +10,7 @@ import { PROVIDERS } from './providers/registry';
 import { allModelMetaKeys } from './providers/capabilities';
 import { OLD_DEFAULT_RULES } from './pipeline/legacyRules';
 import { validateLocalDbSnapshot, isValidRecord } from './localdb/record';
+import { resolveDelimiter, SUBFIELD_DELIMITERS } from './pipeline/marcFormat';
 
 export const SETTINGS_VERSION = 2;
 export const DEFAULT_PROVIDER_ID = 'gemini';
@@ -31,7 +32,9 @@ export const LOCAL_DB_KEYS = ['localDb', 'localDbPendingDeletes', 'localDbUpdate
 export const LOCAL_DB_PATCH_KEYS = ['localDb', 'lookupBackend', 'pendingDeletesAdd', 'pendingDeletesRemove'];
 
 const PROVIDER_IDS = new Set(PROVIDERS.map((p) => p.id));
-const FIXED_KEYS = ['settingsVersion', 'activeProviderId', 'systemPromptRules', 'lookupBackend', ...LOCAL_DB_KEYS];
+/** SPEC-UI2 §4: an independent output preference (never part of a provider or database write). */
+export const DELIMITER_KEY = 'outputSubfieldDelimiter';
+const FIXED_KEYS = ['settingsVersion', 'activeProviderId', 'systemPromptRules', 'lookupBackend', ...LOCAL_DB_KEYS, DELIMITER_KEY];
 
 const storage = () => chrome.storage.local;
 const withLock = (fn) => navigator.locks.request(LOCK_NAME, { mode: 'exclusive' }, fn);
@@ -164,7 +167,9 @@ export const getSettings = async () => {
     localDb: isValidRecord(all.localDb) ? all.localDb : null,
     localDbInvalid: all.localDb !== undefined && all.localDb !== null && !isValidRecord(all.localDb),
     localDbPendingDeletes: Array.isArray(all.localDbPendingDeletes) ? all.localDbPendingDeletes : [],
-    localDbUpdateCheck: all.localDbUpdateCheck ?? null
+    localDbUpdateCheck: all.localDbUpdateCheck ?? null,
+    // Missing or invalid → `$` (SPEC-UI2 §4).
+    subfieldDelimiter: resolveDelimiter(all[DELIMITER_KEY])
   };
 };
 
@@ -238,6 +243,20 @@ export const commitLocalDb = async ({ expectedLocalDb = null, patch = {}, fence 
       return { ok: false, reason: 'write-failed', current: fresh };
     }
     return { ok: true, current: next };
+  });
+};
+
+/**
+ * Locked write of the subfield delimiter (SPEC-UI2 §4, Settings → Output).
+ * @param {'$'|'‡'} value - The delimiter
+ * @returns {Promise<void>}
+ */
+export const setSubfieldDelimiter = async (value) => {
+  if (!SUBFIELD_DELIMITERS.includes(value)) throw new Error('Unknown subfield delimiter');
+  await ready();
+  return withLock(async () => {
+    // Only this key is written: provider and database settings stay as they are.
+    await storage().set({ [DELIMITER_KEY]: value });
   });
 };
 

@@ -27,8 +27,10 @@ import {
   initialRunState, beginSuggest, setSuggestSnapshot, commitSuggest, failSuggest, invalidateSuggest,
   beginLookup, commitLookup, invalidateLookups, beginSelect, setSelectSnapshot, commitSelect, failSelect,
   invalidateSelect, continueWithoutAi, setManualChoice, buildRun,
-  beginNameKeys, commitNameKeys, invalidateNameKeys
+  beginNameKeys, commitNameKeys, invalidateNameKeys, failNameKeys,
+  editSuggestions as editSuggestionsState, isSelectionCurrent, lookupsComplete
 } from './run';
+import { applySuggestionEdit } from './suggestionEdits';
 
 const provenanceOf = (cfg) => (cfg ? { providerId: cfg.providerId, model: cfg.model } : null);
 const isCancel = (err) => err?.kind === 'cancelled';
@@ -100,7 +102,7 @@ export const createWorkflow = ({
   };
   const currentRunKeys = () => (runKeys.runId === state.run.runId ? runKeys.keys : []);
   const listeners = new Set();
-  const controllers = { suggest: null, lookup: new Set(), select: null, nameKeys: null };
+  const controllers = { suggest: null, lookup: new Set(), select: null, nameKeys: null, next: null };
 
   const set = (next) => {
     if (next === state) return;
@@ -147,7 +149,8 @@ export const createWorkflow = ({
       update((s) => commitNameKeys(s, begun.token, resolved));
     } catch (err) {
       logWorkflowError('Error resolving name MARC keys:', err);
-      update(invalidateNameKeys);
+      // SPEC-UI2 §2: a failure invalidates only ITS operation, never a newer one.
+      update((s) => failNameKeys(s, begun.token));
     } finally {
       if (controllers.nameKeys?.controller === controller) controllers.nameKeys = null;
     }
@@ -234,11 +237,12 @@ export const createWorkflow = ({
     set(begun.state);
     if (presentCandidates(suggestions, results, 1).presented.length === 0) {
       update((s) => commitSelect(s, begun.token, { mode: 'ai', choices: {}, additional: [] }));
-      return;
+      return begun.token;
     }
     const controller = new AbortController();
     controllers.select = controller;
     const owns = () => !controller.signal.aborted && state.run.runId === begun.token.runId
+      && state.run.suggestRevision === begun.token.suggestRevision
       && state.select.pending && state.select.revision === begun.token.revision;
     try {
       const { cfg, settings } = await loadConfig();
@@ -256,6 +260,90 @@ export const createWorkflow = ({
     } finally {
       if (controllers.select === controller) controllers.select = null;
     }
+    // The operation's identity, so a caller (Next) can check that THIS
+    // selection is the one that committed. A settled promise proves nothing.
+    return begun.token;
+  };
+
+  // SPEC-UI2 §1 Next: at most one continuation, reserved synchronously.
+  let nextSeq = 0;
+  const cancelNext = () => { controllers.next = null; };
+  const lookupSnapshot = () => ({ ...state.lookup.revisions });
+  const sameLookups = (snapshot) => Object.keys({ ...snapshot, ...state.lookup.revisions })
+    .every((id) => snapshot[id] === state.lookup.revisions[id]);
+
+  /**
+   * "Next: recommendations". With a CURRENT selection it builds and advances;
+   * otherwise it starts a selection and advances only after that same
+   * operation committed a current result. Build and navigation need the same
+   * run, suggestion revision, lookup revisions and operation identity, and the
+   * caller's continued ownership of the Matches view (`stillOwned`).
+   * @param {{onAdvance?:Function, stillOwned?:()=>boolean}} [opts] - Navigation and view ownership
+   * @returns {Promise<{advanced:boolean}>}
+   */
+  const next = async ({ onAdvance = () => {}, stillOwned = () => true } = {}) => {
+    if (!lookupsComplete(state) || controllers.next) return { advanced: false };
+    nextSeq += 1;
+    const op = {
+      id: nextSeq, runId: state.run.runId, suggestRevision: state.run.suggestRevision, lookups: lookupSnapshot()
+    };
+    controllers.next = op;
+    const ownsNext = () => controllers.next === op && state.run.runId === op.runId
+      && state.run.suggestRevision === op.suggestRevision && sameLookups(op.lookups) && stillOwned();
+    const giveUp = () => {
+      if (controllers.next === op) controllers.next = null;
+      return { advanced: false };
+    };
+    if (!isSelectionCurrent(state)) {
+      const token = await select();
+      if (!ownsNext()) return giveUp();
+      // THIS operation must have committed a current, error-free result.
+      if (!token || state.select.revision !== token.revision || state.select.error || !isSelectionCurrent(state)) return giveUp();
+    }
+    if (!ownsNext() || !isSelectionCurrent(state)) return giveUp();
+    controllers.next = null;
+    update(buildRun);
+    maybeResolveNames();
+    onAdvance();
+    return { advanced: true };
+  };
+
+  /**
+   * "Continue without AI (exact matches only)" after a stop error: the
+   * existing fallback (manual overrides kept), then build and advance.
+   * @param {{onAdvance?:Function}} [opts] - Navigation
+   * @returns {{advanced:boolean}}
+   */
+  const continueWithoutAiAndAdvance = ({ onAdvance = () => {} } = {}) => {
+    cancelNext();
+    if (!lookupsComplete(state)) return { advanced: false };
+    update(continueWithoutAi);
+    if (!isSelectionCurrent(state)) return { advanced: false };
+    update(buildRun);
+    maybeResolveNames();
+    onAdvance();
+    return { advanced: true };
+  };
+
+  /**
+   * SPEC-UI2 §2: apply ONE accepted edit of the suggestions (add, edit,
+   * remove) in one atomic transition. Pending lookup, selection, name-key and
+   * Next operations are aborted first. A no-op edit changes nothing.
+   * @param {object} edit - See applySuggestionEdit()
+   * @returns {{ok:boolean, changed?:boolean, error?:string}}
+   */
+  const editSuggestions = (edit) => {
+    if (!state.suggest || state.run.stage === 'idle' || state.run.stage === 'suggesting') {
+      return { ok: false, error: 'The suggestions can be changed once they are ready.' };
+    }
+    const applied = applySuggestionEdit(state.suggest, edit);
+    if (!applied.ok || !applied.changed) return applied;
+    cancelNext();
+    abortLookups();
+    abortSelect();
+    abortNameKeys();
+    update((s) => editSuggestionsState(s, applied.suggestions, { lastIdNumber: applied.lastIdNumber }));
+    return { ok: true, changed: true };
   };
 
   /**
@@ -275,10 +363,13 @@ export const createWorkflow = ({
       update(invalidateSuggest);
     }
     if (step === 'lookup') {
+      cancelNext();
       abortLookups();
       update(invalidateLookups);
     }
     if (step === 'select') {
+      // Leaving Matches ends any Next continuation (SPEC-UI2 §1).
+      cancelNext();
       abortSelect();
       update(invalidateSelect);
     }
@@ -306,6 +397,22 @@ export const createWorkflow = ({
     lookupAll,
     retryLookup,
     select,
+    // SPEC-UI2 §1 and §2.
+    next,
+    continueWithoutAiAndAdvance,
+    editSuggestions,
+    cancelNext,
+    /** "Ask the AI again": rerun the selection WITHOUT advancing (manual overrides kept). */
+    askAgain: () => {
+      cancelNext();
+      return select();
+    },
+    /** Cancel a running selection: nothing is built and nothing advances. */
+    cancelSelect: () => {
+      cancelNext();
+      abortSelect();
+      update(invalidateSelect);
+    },
     continueWithoutAi: () => {
       update(continueWithoutAi);
       maybeResolveNames();
@@ -327,6 +434,7 @@ export const createWorkflow = ({
     leave,
     /** Unmount: abort and invalidate every step. */
     dispose: () => {
+      cancelNext();
       abortSuggest();
       abortLookups();
       abortSelect();

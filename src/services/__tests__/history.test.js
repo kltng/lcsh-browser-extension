@@ -204,7 +204,8 @@ describe('[P4 row13] history: re-render and legacy entries', () => {
     const e = entry();
     await saveHistoryEntry(e);
     const [loaded] = await loadHistory();
-    expect(loaded.recommendations.map((r) => r.cid)).toEqual([C.mpjh.cid, C.japanN.cid, C.actors.cid]);
+    // SPEC-UI2 §3: a NEW snapshot is saved in MARC-tag order (650, 650, then 651) and reloaded as saved.
+    expect(loaded.recommendations.map((r) => r.cid)).toEqual([C.mpjh.cid, C.actors.cid, C.japanN.cid]);
     expect(loaded.selections.find((s) => s.suggestionId === 's6')).toMatchObject({ method: 'manual', noneReason: 'manual-none' });
     expect(loaded).toEqual(e);
   });

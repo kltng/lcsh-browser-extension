@@ -5,7 +5,43 @@
 import { NONE_REASON_WORDS, AUTHORITY_LABELS, REPLACEMENT_NOTE_WORDS } from '../services/pipeline/types';
 import { lookupErrorMessage } from '../services/lookup/scheduler';
 
-export const SUGGESTION_NOTE = 'These are AI suggestions. The next step looks them up at the Library of Congress.';
+// SPEC-UI2 §2: the list mixes AI and user headings.
+export const SUGGESTION_NOTE = 'These are proposed search headings, not LC authority records. The next step looks them up.';
+export const SUGGESTIONS_HEADING = 'Suggestions';
+export const DOWNSTREAM_WARNING = 'Applying changes clears all matches and choices. Look up the headings again.';
+
+/**
+ * SPEC-UI2 §6: the AI's own confidence as a level — High (80–100), Medium
+ * (50–79), Low (0–49) — only for an integer 0–100. Null or invalid values have
+ * no level (never coerced to Low).
+ * @param {any} confidence - Selection confidence
+ * @returns {'High'|'Medium'|'Low'|null}
+ */
+export const confidenceLevel = (confidence) => {
+  if (!Number.isInteger(confidence) || confidence < 0 || confidence > 100) return null;
+  if (confidence >= 80) return 'High';
+  if (confidence >= 50) return 'Medium';
+  return 'Low';
+};
+
+/**
+ * The tooltip of a confidence level.
+ * @param {number} confidence - Selection confidence (0–100)
+ * @returns {string}
+ */
+export const confidenceTooltip = (confidence) => `The AI’s own estimate (0–100): ${confidence}`;
+
+/**
+ * Who wrote a suggestion's text (SPEC-UI2 §2), in words. An unsupported value
+ * is never shown as known AI or user authorship.
+ * @param {string|undefined} source - 'ai' | 'user' | anything else
+ * @returns {string}
+ */
+export const authorLabel = (source) => {
+  if (source === 'user') return 'Your heading';
+  if (source === 'ai' || source === undefined) return 'AI suggestion';
+  return 'Suggestion';
+};
 export const NO_MATCH_TEXT = 'No match returned by this search';
 export const LOCAL_DB_ERROR_TEXT = 'The local database could not answer this search';
 /**
@@ -141,7 +177,8 @@ export const replacementNoteText = (note) =>
  */
 export const choiceText = (selection, { mode, hasManual }) => {
   if (!selection) return 'No choice yet';
-  if (selection.method === 'ai') return `AI choice (confidence ${selection.confidence})`;
+  // SPEC-UI2 §6: the confidence is shown next to it as a level (ConfidenceBadge).
+  if (selection.method === 'ai') return 'AI choice';
   if (selection.method === 'exact') return 'Exact match';
   if (selection.method === 'manual') return selection.cid ? 'Your choice' : NONE_REASON_WORDS['manual-none'];
   if (selection.noneReason === 'not-chosen' && !mode && !hasManual) return 'No choice yet';
@@ -154,11 +191,8 @@ export const choiceText = (selection, { mode, hasManual }) => {
  * @returns {string}
  */
 export const methodText = (entry) => {
-  if (entry.method === 'ai') {
-    return entry.suggestionId === null
-      ? `Additional AI pick (confidence ${entry.confidence})`
-      : `AI choice (confidence ${entry.confidence})`;
-  }
+  // SPEC-UI2 §6: the confidence is shown next to it as a level (ConfidenceBadge).
+  if (entry.method === 'ai') return entry.suggestionId === null ? 'Additional AI pick' : 'AI choice';
   if (entry.method === 'exact') return 'Exact match';
   if (entry.method === 'manual') return 'Your choice';
   return 'None';

@@ -48,7 +48,8 @@ describe('[P4 row15] honesty: step components', () => {
       const text = expectHonest(html);
       expect(hrefsOf(html)).toEqual([]);
       expect(lcIdsOf(text)).toEqual([]);
-      expect(text).toContain('These are AI suggestions. The next step looks them up at the Library of Congress.');
+      // SPEC-UI2 §2: the note of the (now mixed) list says they are search headings, not LC records.
+      expect(text).toContain('These are proposed search headings, not LC authority records. The next step looks them up.');
       expect(text).toContain('AI suggestion · topical');
       expect(text.includes('The model did not return structured output; suggestions were read from plain text.')).toBe(suggestMode === 'text-fallback');
     }
@@ -69,7 +70,9 @@ describe('[P4 row15] honesty: step components', () => {
     expect(NO_MATCH_TEXT).toBe('No match returned by this search');
     expect(text).toContain('Lookup failed: Could not reach id.loc.gov. Check your connection.');
     expect(text).toContain('Retry lookup');
-    expect(text).toContain('AI choice (confidence 85)');
+    // SPEC-UI2 §6: the AI's 85 is shown as a level, the number stays in the tooltip.
+    expect(text).toContain('AI choice AI confidence: High');
+    expect(html).toContain('data-confidence="85"');
     expect(text).toContain('Your choice');
     expect(text).toContain('You chose none');
     expect(text).toContain('None — the AI chose none of the candidates');
@@ -114,11 +117,14 @@ describe('[P4 row15] honesty: step components', () => {
       recommendations: built.recommendations, selections: selectionsOf(built), suggestions: SUGGESTIONS, onCopy: vi.fn()
     });
     const text = expectHonest(html);
-    expect(lcIdsOf(text)).toEqual(['sh2008108026', 'n78089021', 'sh2010102453']);
+    // SPEC-UI2 §3: recommendations are shown in MARC-tag order (650 mpjh, 650 actors, then 651 Japan).
+    expect(lcIdsOf(text)).toEqual(['sh2008108026', 'sh2010102453', 'n78089021']);
     expect(hrefsOf(html)).toEqual(built.recommendations.map((r) => lcLink(r.uri)));
     expect(text).toContain('MARC field (text form):');
     expect(text).toContain('650 _0 $a Motion pictures $z Japan $x History');
-    expect(text).toContain('Additional AI pick (confidence 45)');
+    // SPEC-UI2 §6: the additional pick's 45 is shown as its own level.
+    expect(text).toContain('Additional AI pick AI confidence: Low');
+    expect(html).toContain('data-confidence="45"');
     expect(text).toContain('Suggestions without an LC heading');
     expect(text).toContain('Japanese cinema (AI suggestion)');
     expect(text).toContain('no match returned by this search');

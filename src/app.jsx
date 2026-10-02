@@ -1,26 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
-import { CssBaseline, ThemeProvider, createTheme } from '@mui/material';
+import { CssBaseline, ThemeProvider } from '@mui/material';
+import appTheme from './theme';
 import { AppProvider } from './context/AppContext';
 import { createLocalDbClient } from './services/localdb/client';
 import { createUpdateChecker } from './services/localdb/pointer';
 import { localDbUpdateCheck, getSettings } from './services/settings';
 import AppShell from './components/AppShell';
 
-// Create a theme
-const theme = createTheme({
-    palette: {
-        primary: {
-            main: '#1976d2',
-        },
-        secondary: {
-            main: '#dc004e',
-        },
-    },
-    typography: {
-        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-    },
-});
+// SPEC-UI2 §11, §12: the shared theme (the popup uses it too)
+const theme = appTheme;
 
 // SPEC-P5 §3.1: ONE local-database client per app document, created at module
 // level ABOVE the hash-route components, so the workflow and #settings share

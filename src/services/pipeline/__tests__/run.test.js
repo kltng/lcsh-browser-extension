@@ -133,7 +133,10 @@ describe('[P4 row12] run.js: stages and stale runs', () => {
   it('a new suggest clears lookup, selection and recommendations', () => {
     const built = buildRun(setManualChoice(selected(), 's3', C.japanN.cid));
     const next = beginSuggest(built, { runId: 'run-2', snapshot: PROV, input: {} }).state;
-    expect(next.run).toEqual({ runId: 'run-2', stage: 'suggesting', snapshots: { suggest: PROV, select: null } });
+    // UI2 §2: the suggestion revision is monotonic across runs (the old run's + 1).
+    expect(next.run).toEqual({
+      runId: 'run-2', stage: 'suggesting', snapshots: { suggest: PROV, select: null }, suggestRevision: built.run.suggestRevision + 1
+    });
     expect(next.suggest).toBeNull();
     expect(next.lookup.results).toEqual({});
     expect(next.select.manual).toEqual({});
@@ -194,7 +197,8 @@ describe('[P4 row12] run.js: a lookup retry during a pending selection (fix-1 #2
     // The AI choices are cleared at start; the built recommendations follow.
     expect(again.state.recommendations).toEqual([]);
     const done = commitSelect(again.state, again.token, AI);
-    expect(done.recommendations.map((r) => r.cid)).toEqual([C.mpjh.cid, C.japanN.cid, C.japanHistory.cid, C.mp.cid]);
+    // SPEC-UI2 §3: MARC-tag order (650s first, then 651s), canonical order within a tag.
+    expect(done.recommendations.map((r) => r.cid)).toEqual([C.mpjh.cid, C.mp.cid, C.japanN.cid, C.japanHistory.cid]);
   });
 
   it('recommendations regenerate after continueWithoutAi', () => {
@@ -233,7 +237,8 @@ describe('[P4 row12] run.js: a lookup retry drops the additional picks of that s
 
   it('(1) retry s3 → its pick disappears and stays gone when the retried list returns the SAME cid; the s1 pick remains', () => {
     const built = builtWithAdditional();
-    expect(recCids(built)).toEqual([C.mpjh.cid, C.japanHistory.cid, C.mp.cid]);
+    // SPEC-UI2 §3: MARC-tag order (650 mpjh, 650 mp, then 651 Japan--History).
+    expect(recCids(built)).toEqual([C.mpjh.cid, C.mp.cid, C.japanHistory.cid]);
     const retry = beginLookup(built, ['s3']);
     expect(retry.state.select.additional).toEqual([{ cid: C.mp.cid, confidence: 30, suggestionId: 's1' }]);
     expect(recCids(retry.state)).toEqual([C.mpjh.cid, C.mp.cid]);

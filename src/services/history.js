@@ -104,6 +104,17 @@ const marcOf = (m) => ({
 });
 
 /**
+ * A saved suggestion's authorship: missing → 'ai' (entries saved before
+ * SPEC-UI2), 'ai' / 'user' kept, anything else 'unknown'.
+ * @param {any} value - Stored `source`
+ * @returns {'ai'|'user'|'unknown'}
+ */
+export const suggestionSourceOf = (value) => {
+  if (value === undefined) return 'ai';
+  return value === 'ai' || value === 'user' ? value : 'unknown';
+};
+
+/**
  * Rebuild a v2 entry field by field (allowlist; nothing is spread).
  * @param {object} raw - Stored or built v2 entry
  * @returns {object}
@@ -137,7 +148,10 @@ export const rebuildV2 = (raw) => {
     suggestMode: pick(r.suggestMode, ['json', 'text-fallback'], 'json'),
     suggestions: arr(r.suggestions).map((s) => ({
       id: str(s?.id), heading: str(s?.heading), kind: pick(s?.kind, ['topical', 'geographic', 'name', 'genre', 'unknown'], 'unknown'),
-      reason: str(s?.reason)
+      reason: str(s?.reason),
+      // SPEC-UI2 §2: older v2 entries have no field (AI-written then); an
+      // unsupported explicit value is never shown as known AI or user authorship.
+      source: suggestionSourceOf(s?.source)
     })),
     lookup: {
       backend,

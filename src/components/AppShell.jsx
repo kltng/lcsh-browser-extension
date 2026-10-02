@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import {
   Box, Container, Paper, Typography, Stepper, Step, StepLabel, Button, Alert
 } from '@mui/material';
@@ -27,9 +27,11 @@ const STEP_VIEWS = [BibliographicInfoForm, InitialSuggestions, ScrapedResults, F
  */
 const AppShell = ({ hash, onNavigate }) => {
   const {
-    activeStep, settingsStatus, settingsError, historyOpen, openHistory
+    activeStep, settingsStatus, settingsError, historyOpen, openHistory, noteNavigation = () => {}
   } = useAppContext();
   const showSettings = hash === SETTINGS_HASH;
+  // Opening or closing Settings is a navigation too (SPEC-UI2 §1).
+  useEffect(() => { noteNavigation(); }, [showSettings]);
   const showHistory = historyOpen && !showSettings;
   const StepView = STEP_VIEWS[activeStep] || BibliographicInfoForm;
 

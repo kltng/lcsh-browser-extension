@@ -102,14 +102,14 @@ const SystemPromptEditor = () => {
                             color="secondary"
                             onClick={handleReset}
                         >
-                            Reset to Default
+                            Reset to default
                         </Button>
                         <Button
                             variant="contained"
                             color="primary"
                             onClick={handleSave}
                         >
-                            Save Rules
+                            Save rules
                         </Button>
                     </Box>
                 </Box>

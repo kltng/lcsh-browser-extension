@@ -4,7 +4,10 @@ import { C } from '../../../../test/pipelineFixtures';
 
 describe('[P4 row9] select: data model validators (types.js)', () => {
   it('factories normalize their fields', () => {
-    expect(makeSuggestion({ id: 's1', heading: 'Cats', kind: 'bogus' })).toEqual({ id: 's1', heading: 'Cats', kind: 'unknown', reason: '' });
+    // UI2 §2: a new suggestion is AI-authored unless explicitly the user's.
+    expect(makeSuggestion({ id: 's1', heading: 'Cats', kind: 'bogus' })).toEqual({ id: 's1', heading: 'Cats', kind: 'unknown', reason: '', source: 'ai' });
+    expect(makeSuggestion({ id: 's2', heading: 'Dogs', source: 'user' }).source).toBe('user');
+    expect(makeSuggestion({ id: 's3', heading: 'Owls', source: 'robot' }).source).toBe('ai');
     expect(makeSelection({ suggestionId: 's1', cid: 'lcsh:x', method: 'manual', confidence: 90, noneReason: 'no-results' }))
       .toMatchObject({ confidence: null, noneReason: null });
     expect(makeSelection({ suggestionId: 's1', method: 'ai', cid: 'lcsh:x', confidence: 101 }).confidence).toBeNull();

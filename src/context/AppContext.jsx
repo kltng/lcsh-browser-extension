@@ -91,8 +91,24 @@ export const AppProvider = ({ children, localDbClient = null, localDbUpdates = n
   // UI round 1: the History VIEW opens over the workflow, like Settings. The
   // workflow stays mounted, and opening or closing it leaves no step.
   const [historyOpen, setHistoryOpen] = useState(initialHistoryOpen);
-  const openHistory = () => setHistoryOpen(true);
-  const closeHistory = () => setHistoryOpen(false);
+  // SPEC-UI2 §1: every navigation (a step, History, Settings) raises the view
+  // epoch, so a Next continuation started on Matches knows it no longer owns the view.
+  const viewEpochRef = useRef(0);
+  const noteNavigation = () => { viewEpochRef.current += 1; };
+  const viewEpoch = () => viewEpochRef.current;
+  const openHistory = () => {
+    noteNavigation();
+    setHistoryOpen(true);
+  };
+  const closeHistory = () => {
+    noteNavigation();
+    setHistoryOpen(false);
+  };
+  // SPEC-UI2 §5: "Back to Matches" / "Edit search heading" ask the target view
+  // to focus one suggestion. A request never mutates the run.
+  const [focusRequest, setFocusRequest] = useState(null);
+  const requestFocus = (view, suggestionId) => setFocusRequest({ view, suggestionId });
+  const clearFocusRequest = () => setFocusRequest(null);
   const activeStepRef = useRef(0);
   const [error, setError] = useState(null);
   const [conversationHistory, setConversationHistory] = useState([]);
@@ -100,7 +116,10 @@ export const AppProvider = ({ children, localDbClient = null, localDbUpdates = n
   // Leaving a step invalidates its pending operations (§9)
   const setActiveStep = (step) => {
     const previous = activeStepRef.current;
-    if (previous !== step) (STEP_OPERATIONS[previous] || []).forEach((op) => workflow.leave(op));
+    if (previous !== step) {
+      noteNavigation();
+      (STEP_OPERATIONS[previous] || []).forEach((op) => workflow.leave(op));
+    }
     activeStepRef.current = step;
     setActiveStepState(step);
   };
@@ -193,6 +212,11 @@ export const AppProvider = ({ children, localDbClient = null, localDbUpdates = n
     historyOpen,
     openHistory,
     closeHistory,
+    noteNavigation,
+    viewEpoch,
+    focusRequest,
+    requestFocus,
+    clearFocusRequest,
     error,
     setError,
     conversationHistory,

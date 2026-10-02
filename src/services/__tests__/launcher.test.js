@@ -39,7 +39,7 @@ describe('[row 25] settings readiness failure: popup status and static PopupView
     }));
     expect(html).toContain('Settings could not be loaded');
     const buttons = html.split('<button').slice(1);
-    const open = buttons.find((b) => b.includes('Open LCSH Tool'));
+    const open = buttons.find((b) => b.includes('Open LCSH tool')); // SPEC-UI2 §12: sentence case
     const settings = buttons.find((b) => b.includes('>Settings<'));
     expect(open).toContain('disabled');
     expect(settings).not.toContain('disabled=""');

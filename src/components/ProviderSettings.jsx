@@ -15,6 +15,8 @@ import {
   CircularProgress
 } from '@mui/material';
 import { Visibility, VisibilityOff } from '@mui/icons-material';
+import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
+import { Tooltip } from '@mui/material';
 import { saveProviderDraft, saveProviderAndActivate } from '../services/settings';
 import {
   resolveConfigFromDraft, listModels, testConnection, probeJsonModes, ProviderError
@@ -27,6 +29,9 @@ import {
 } from './providerDraft';
 
 const STALE_MESSAGE = 'Settings changed in another tab — reload them.';
+// SPEC-UI2 §9.
+export const IMAGES_LABEL = 'This model can read images';
+export const IMAGES_HELP = 'The provider does not report whether this model accepts images. Tick this only if you know it does.';
 export const KEY_CLEARED_MESSAGE = 'The server address changed, so the API key was cleared. Enter the key for the new server.';
 const JSON_MODE_LABELS = {
   json_schema: 'JSON Schema (strict)',
@@ -254,7 +259,16 @@ const ProviderSettings = ({ entry, stored, modelMeta, isActive }) => {
         <FormControlLabel
           sx={{ mb: 2 }}
           control={<Checkbox checked={draft.imagesOverride} disabled={locked} onChange={(e) => setForm((state) => editDraft(state, 'imagesOverride', e.target.checked, entry))} />}
-          label="This model can read images (the provider does not say)"
+          label={(
+            <Box component="span" sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5 }}>
+              {IMAGES_LABEL}
+              <Tooltip title={IMAGES_HELP}>
+                <IconButton size="small" aria-label={IMAGES_HELP} onClick={(e) => e.preventDefault()}>
+                  <HelpOutlineIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            </Box>
+          )}
         />
       )}
 

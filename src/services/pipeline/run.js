@@ -6,6 +6,7 @@
  */
 import { mergeSelections, buildRecommendations, exactOnlyChoices } from './select';
 import { applyNameKeys, nameKeyTargets, mergeNameKeys } from './nameKeys';
+import { sortRecommendations } from './marcFormat';
 
 export const STAGES = ['idle', 'suggesting', 'suggested', 'looking-up', 'looked-up', 'selecting', 'selected', 'built'];
 
@@ -16,8 +17,13 @@ const emptyNameKeys = () => ({ revision: 0, pending: false, keys: {}, reasons: {
 
 // `deps`: the lookup revision of every candidate list the pending selection
 // presented; a choice from a list that was replaced since then is rejected.
+// `completedFor` (SPEC-UI2 §1): the exact snapshot a COMPLETED selection was
+// made for — the suggestion revision and the lookup revision of every list it
+// saw. A mode, a stage or a non-empty choices object alone never proves that
+// a selection is current; only this snapshot, compared with the state, does.
 const emptySelect = () => ({
-  revision: 0, pending: false, mode: null, choices: {}, additional: [], manual: {}, error: null, fallbackKind: null, deps: {}
+  revision: 0, pending: false, mode: null, choices: {}, additional: [], manual: {}, error: null, fallbackKind: null, deps: {},
+  completedFor: null
 });
 
 /**
@@ -25,7 +31,9 @@ const emptySelect = () => ({
  * @returns {object}
  */
 export const initialRunState = () => ({
-  run: { runId: null, stage: 'idle', snapshots: { suggest: null, select: null } },
+  // `suggestRevision` (SPEC-UI2 §2): monotonic; every accepted edit of the
+  // suggestions raises it, and every operation token carries it.
+  run: { runId: null, stage: 'idle', snapshots: { suggest: null, select: null }, suggestRevision: 0 },
   input: null,
   suggest: null,
   suggestError: null,
@@ -55,10 +63,15 @@ export const selectionsOf = (state) => mergeSelections({
   manual: state.select.manual
 });
 
-/** The recommendations of a state, with the name keys resolved so far applied. */
-const recommendationsOf = (state) => applyNameKeys(buildRecommendations({
+/**
+ * The recommendations of a state, with the name keys resolved so far applied,
+ * then sorted by MARC tag (SPEC-UI2 §3). They are rebuilt from the canonical
+ * suggestion-then-additional order every time, so a name key that completes
+ * later moves its recommendation to the right place.
+ */
+const recommendationsOf = (state) => sortRecommendations(applyNameKeys(buildRecommendations({
   selections: selectionsOf(state), additional: state.select.additional, results: state.lookup.results
-}), nameKeyMaps(state));
+}), nameKeyMaps(state)));
 
 // Any change of a choice or a candidate list regenerates built recommendations.
 const refresh = (state) => {
@@ -101,7 +114,9 @@ const settleNameKeysOnChoiceChange = (before, after) => (
  */
 export const beginSuggest = (state, { runId, snapshot, input }) => {
   const next = initialRunState();
-  next.run = { runId, stage: 'suggesting', snapshots: { suggest: snapshot, select: null } };
+  next.run = {
+    runId, stage: 'suggesting', snapshots: { suggest: snapshot, select: null }, suggestRevision: (state.run.suggestRevision || 0) + 1
+  };
   next.input = input;
   // Revisions keep increasing across runs, so no old token can ever match.
   next.lookup.revisions = { ...state.lookup.revisions };
@@ -112,6 +127,11 @@ export const beginSuggest = (state, { runId, snapshot, input }) => {
 };
 
 const isCurrentRun = (state, token) => Boolean(token) && token.runId === state.run.runId;
+
+// SPEC-UI2 §2: a lookup, selection or name-key token is current only for the
+// suggestion revision it was issued under. The check is strict: a token
+// without the field is never current.
+const isCurrentSuggestRevision = (state, token) => token.suggestRevision === state.run.suggestRevision;
 
 /**
  * Record the provenance of the suggest config once it is loaded (current run only).
@@ -179,7 +199,7 @@ export const beginLookup = (state, suggestionIds) => {
     delete results[id];
     delete choices[id];
     delete manual[id];
-    tokens[id] = { runId: state.run.runId, suggestionId: id, revision: revisions[id] };
+    tokens[id] = { runId: state.run.runId, suggestRevision: state.run.suggestRevision, suggestionId: id, revision: revisions[id] };
   }
   // Additional picks record the suggestion whose presented list they came
   // from (validateSelectAnswer); a retried list drops its picks.
@@ -197,7 +217,7 @@ export const beginLookup = (state, suggestionIds) => {
   return { state: refresh(next), tokens };
 };
 
-const isCurrentLookup = (state, token) => isCurrentRun(state, token)
+const isCurrentLookup = (state, token) => isCurrentRun(state, token) && isCurrentSuggestRevision(state, token)
   && state.lookup.revisions[token.suggestionId] === token.revision && state.lookup.pending[token.suggestionId];
 
 /**
@@ -253,10 +273,13 @@ export const beginSelect = (state, snapshot) => {
     select: { ...emptySelect(), manual: state.select.manual, revision, pending: true, deps }
   };
   // Clearing the AI choices changes the effective choices.
-  return { state: settleNameKeysOnChoiceChange(state, refresh(next)), token: { runId: state.run.runId, revision } };
+  return {
+    state: settleNameKeysOnChoiceChange(state, refresh(next)),
+    token: { runId: state.run.runId, suggestRevision: state.run.suggestRevision, revision }
+  };
 };
 
-const isCurrentSelect = (state, token) => isCurrentRun(state, token)
+const isCurrentSelect = (state, token) => isCurrentRun(state, token) && isCurrentSuggestRevision(state, token)
   && state.select.revision === token.revision && state.select.pending;
 
 /**
@@ -293,7 +316,9 @@ export const commitSelect = (state, token, result) => {
   return settleNameKeysOnChoiceChange(state, refresh(withStage({
     ...state,
     select: {
-      ...state.select, pending: false, mode: result.mode, choices, additional, error: null, fallbackKind: result.fallbackKind || null
+      ...state.select, pending: false, mode: result.mode, choices, additional, error: null, fallbackKind: result.fallbackKind || null,
+      // The snapshot this selection was made for: the lists it saw (UI2 §1).
+      completedFor: { suggestRevision: token.suggestRevision, lookupRevisions: { ...state.select.deps } }
     }
   }, 'selected')));
 };
@@ -329,9 +354,52 @@ export const continueWithoutAi = (state) => settleNameKeysOnChoiceChange(state, 
   ...state,
   select: {
     ...state.select, pending: false, mode: 'exact-fallback', error: null, additional: [], fallbackKind: 'user',
-    choices: exactOnlyChoices(state.suggest?.suggestions || [], state.lookup.results)
+    choices: exactOnlyChoices(state.suggest?.suggestions || [], state.lookup.results),
+    // The user's fallback is a completed selection for the lists as they are now (UI2 §1).
+    completedFor: { suggestRevision: state.run.suggestRevision, lookupRevisions: completedLookupRevisions(state) }
   }
 }, 'selected')));
+
+/**
+ * The lookup revision of every list that has a completed (not pending) result.
+ * @param {object} state - Run state
+ * @returns {Object<string, number>}
+ */
+const completedLookupRevisions = (state) => Object.fromEntries(Object.keys(state.lookup.results)
+  .filter((id) => !state.lookup.pending[id])
+  .map((id) => [id, state.lookup.revisions[id]]));
+
+/**
+ * SPEC-UI2 §1: every current suggestion has a completed lookup result, no
+ * lookup and no selection is pending, and at least one suggestion exists.
+ * `partial`, `failed` and `no-results` are completed; a missing result (for
+ * example after a cancel) is not.
+ * @param {object} state - Run state
+ * @returns {boolean}
+ */
+export const lookupsComplete = (state) => {
+  const suggestions = state.suggest?.suggestions || [];
+  return suggestions.length > 0
+    && Object.keys(state.lookup.pending).length === 0
+    && !state.select.pending
+    && suggestions.every((s) => Boolean(state.lookup.results[s.id]));
+};
+
+/**
+ * SPEC-UI2 §1: a CURRENT selection is a completed AI selection or exact-only
+ * fallback made for the current suggestion revision and the complete current
+ * lookup-revision snapshot (every current suggestion's list, unchanged).
+ * @param {object} state - Run state
+ * @returns {boolean}
+ */
+export const isSelectionCurrent = (state) => {
+  const done = state.select.completedFor;
+  if (!done || state.select.pending || !state.select.mode) return false;
+  if (done.suggestRevision !== state.run.suggestRevision) return false;
+  return lookupsComplete(state) && (state.suggest?.suggestions || []).every((s) => (
+    Object.hasOwn(done.lookupRevisions, s.id) && done.lookupRevisions[s.id] === state.lookup.revisions[s.id]
+  ));
+};
 
 /**
  * A manual choice ("Use this heading" = cid, "Use none" = null). Only a
@@ -385,13 +453,13 @@ export const beginNameKeys = (state, { retry = false } = {}) => {
   };
   return {
     state: next,
-    token: { runId: state.run.runId, revision, deps, choicesKey },
+    token: { runId: state.run.runId, suggestRevision: state.run.suggestRevision, revision, deps, choicesKey },
     targets,
     bypassCids: new Set(retry ? unresolved.map((t) => t.cid) : [])
   };
 };
 
-const isCurrentNameKeys = (state, token) => isCurrentRun(state, token)
+const isCurrentNameKeys = (state, token) => isCurrentRun(state, token) && isCurrentSuggestRevision(state, token)
   && state.nameKeys.revision === token.revision && state.nameKeys.pending
   && effectiveChoicesKey(state) === token.choicesKey
   && Object.entries(token.deps).every(([id, revision]) => state.lookup.revisions[id] === revision
@@ -418,6 +486,61 @@ export const commitNameKeys = (state, token, resolved) => {
     }
   };
   return refresh(next);
+};
+
+/**
+ * A FAILED name-key round (SPEC-UI2 §2): it invalidates only its OWN
+ * operation. A stale failure — an older run, suggestion revision or name-key
+ * revision — never invalidates a newer operation.
+ * @param {object} state - Run state
+ * @param {object} token - Token of beginNameKeys
+ * @returns {object}
+ */
+export const failNameKeys = (state, token) => {
+  if (!isCurrentRun(state, token) || !isCurrentSuggestRevision(state, token)) return state;
+  if (state.nameKeys.revision !== token.revision) return state;
+  return invalidateNameKeys(state);
+};
+
+/**
+ * SPEC-UI2 §2: ONE atomic transition for every accepted edit of the
+ * suggestions (add, edit, remove). It raises the suggestion revision (so every
+ * older lookup, selection and name-key token is stale), clears all lookup
+ * results and pending flags, the AI and manual selections, the additional
+ * picks, the selection error and completion data, and the recommendations,
+ * invalidates the name-key operation, and returns the run to `suggested`.
+ * The bibliographic input and the original generation provenance are kept;
+ * resolved name keys and recorded reasons stay cached by cid (P5 §7), but
+ * nothing is rebuilt until the next build.
+ * @param {object} state - Run state
+ * @param {object[]} suggestions - The new, already validated suggestions
+ * @param {{lastIdNumber?:number}} [meta] - The run's suggestion-id counter
+ * @returns {object}
+ */
+export const editSuggestions = (state, suggestions, { lastIdNumber } = {}) => {
+  if (!state.suggest || state.run.stage === 'idle' || state.run.stage === 'suggesting') return state;
+  const revisions = { ...state.lookup.revisions };
+  for (const id of new Set([...Object.keys(revisions), ...suggestions.map((s) => s.id)])) {
+    revisions[id] = (revisions[id] || 0) + 1;
+  }
+  return {
+    ...state,
+    run: {
+      ...state.run,
+      stage: 'suggested',
+      suggestRevision: state.run.suggestRevision + 1,
+      snapshots: { ...state.run.snapshots, select: null }
+    },
+    suggest: {
+      ...state.suggest,
+      suggestions,
+      ...(Number.isInteger(lastIdNumber) ? { lastIdNumber } : {})
+    },
+    lookup: { results: {}, revisions, pending: {} },
+    select: { ...emptySelect(), revision: state.select.revision + 1 },
+    nameKeys: { ...state.nameKeys, pending: false, revision: state.nameKeys.revision + 1 },
+    recommendations: null
+  };
 };
 
 /**
