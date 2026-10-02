@@ -174,3 +174,52 @@ describe('[P4 row3] suggest: requests through real adapters (ported P3 row 23 ch
     expect(result.suggestMode).toBe('text-fallback');
   });
 });
+
+// Security re-review (Phase 6): the key check runs AFTER parsing too, so a
+// value that only becomes the key once a bullet is stripped is still refused.
+describe('[P6 fix12] the key check covers the parsed suggestions (real generate, LM Studio)', () => {
+  const BAD_JSON = 'not json at all';
+  /** The JSON attempt gets an invalid answer, so the text fallback runs with `fallback`. */
+  const runWith = async (apiKey, fallback) => {
+    const cfg = await makeCfg('lmstudio', { apiKey });
+    const fetchMock = mockFetch(response(successBody('openai-style', BAD_JSON)), response(successBody('openai-style', fallback)));
+    const outcome = await runSuggest({ cfg, bibliographicInfo: BIB, rules: 'R' })
+      .then((value) => ({ value }), (error) => ({ error }));
+    return { ...outcome, fetchMock };
+  };
+
+  it('key "a", text fallback "- a" → rejected (the bullet-stripped heading equals the key)', async () => {
+    const { error, value, fetchMock } = await runWith('a', '- a\n- Cats');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(value).toBeUndefined();
+    expect(error).toMatchObject({ kind: 'invalid_output' });
+  });
+
+  it('key "a", a numbered or bold line that becomes "a" → rejected', async () => {
+    for (const fallback of ['1. a', '2) **a**', '```\n* a\n```']) {
+      const { error } = await runWith('a', fallback);
+      expect(error, fallback).toMatchObject({ kind: 'invalid_output' });
+    }
+  });
+
+  it('a 7-character key that appears after bullet/number stripping → rejected', async () => {
+    for (const fallback of ['- k7sEcrt', '3.k7sEcrt', '**k7sEcrt**']) {
+      const { error } = await runWith('k7sEcrt', fallback);
+      expect(error, fallback).toMatchObject({ kind: 'invalid_output' });
+    }
+  });
+
+  it('key "a" with ordinary answers is still accepted (text fallback and JSON)', async () => {
+    const { value } = await runWith('a', '- Cats\n- A history of a city\n3. Japan--History');
+    expect(value.suggestions.map((s) => s.heading)).toEqual(['Cats', 'A history of a city', 'Japan--History']);
+
+    const cfg = await makeCfg('lmstudio', { apiKey: 'a' });
+    mockFetch(response(successBody('openai-style', JSON.stringify({
+      subjectAnalysis: 'A book about a city and a river.',
+      suggestions: [{ heading: 'Rivers', kind: 'topical', reason: 'It is a main topic.' }]
+    }))));
+    const json = await runSuggest({ cfg, bibliographicInfo: BIB, rules: 'R' });
+    expect(json.suggestMode).toBe('json');
+    expect(json.suggestions[0].reason).toBe('It is a main topic.');
+  });
+});

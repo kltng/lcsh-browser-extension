@@ -123,6 +123,15 @@ export const listModels = async (cfg, { signal } = {}) => {
     op.close();
   }
   if (!result) return { ...UNSUPPORTED, models: [] };
+  // P6 security re-review: the raw answer was checked page by page; the ids
+  // are normalized afterwards (Gemini's "models/" prefix is stripped), so the
+  // FINAL list is checked again before it is cached or returned.
+  try {
+    rejectEchoedKey(cfg, result.models.map(({ id, label, supportedParameters }) => ({ id, label, supportedParameters })));
+  } catch (err) {
+    logProviderError(err);
+    throw err;
+  }
 
   try {
     await saveModelMeta(cfg.metaKey, {

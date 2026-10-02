@@ -4,7 +4,7 @@
  * exception to SPEC-P3 §4.1). Every other ProviderError propagates.
  */
 import { generate as defaultGenerate, ProviderError } from '../providers/index';
-import { errorContext } from '../providers/errors';
+import { errorContext, rejectEchoedKey } from '../providers/errors';
 import { normalizeLabel } from '../lookup/normalize';
 import { hasLetterOrNumber } from '../lookup/searchText';
 import { buildSuggestPrompt, TEXT_FALLBACK_INSTRUCTION, SUGGESTION_COUNT_HINT } from './prompts';
@@ -98,7 +98,11 @@ export async function runSuggest({
   if (json) {
     const suggestions = postProcessSuggestions(json.suggestions);
     if (suggestions.length === 0) throw new ProviderError('invalid_output', ctx);
-    return { subjectAnalysis: json.subjectAnalysis.trim(), suggestions, suggestMode: 'json', provenance };
+    const subjectAnalysis = json.subjectAnalysis.trim();
+    // P6 security re-review: the key check runs again on the FINAL values,
+    // after trimming and merging, right before they are returned.
+    rejectEchoedKey(cfg, { subjectAnalysis, suggestions: suggestions.map(({ heading, kind, reason }) => ({ heading, kind, reason })) });
+    return { subjectAnalysis, suggestions, suggestMode: 'json', provenance };
   }
 
   const remaining = SUGGEST_DEADLINE_MS - (Date.now() - startedAt);
@@ -109,6 +113,9 @@ export async function runSuggest({
   });
   const headings = parseTextFallback(result.text);
   if (headings.length === 0) throw new ProviderError('invalid_output', ctx);
+  // The raw answer was checked inside generate(); parsing strips bullets,
+  // numbers, ** and fences, so "- a" only BECOMES the key "a" here.
+  rejectEchoedKey(cfg, headings);
   return {
     subjectAnalysis: '',
     suggestions: headings.map((heading, i) => makeSuggestion({ id: `s${i + 1}`, heading, kind: 'unknown', reason: '' })),

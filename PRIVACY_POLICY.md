@@ -80,9 +80,14 @@ details of any download, such as your IP address.
 
 Everything is stored by Chrome on your computer:
 
-- **API keys** — in the extension's local storage. They are sent only to the
-  matching provider, always in a request header, never in a web address.
-  They never appear in your history, in exported files or in error messages.
+- **API keys** — in the extension's local storage. The extension sends a key
+  only to the server address it was entered for, always in a request header,
+  never in a web address; if you change the address, the key is cleared. The
+  extension never writes a key into your history, exported files or error
+  messages itself. It also refuses an AI answer that repeats your key. For
+  very short keys (under 8 characters, such as a local LM Studio key) this
+  check cannot catch a copy hidden inside a longer word, so use a key of
+  8 or more characters if the AI service is not on your own computer.
 - **Your settings** — the provider and model you chose, your cataloguing
   rules, and which lookup source you use.
 - **History** — the records you save, including the headings, their Library

@@ -297,6 +297,22 @@ describe('[P6 fix11b] short keys: whole tokens (2–7 characters), equality (1 c
       .toMatchObject({ kind: 'invalid_output' });
   });
 
+  // P6 fix 12: the model list is checked AFTER normalization too ("models/a" → "a").
+  it('key "a": a Gemini model id that becomes "a" once "models/" is stripped → rejected, nothing cached', async () => {
+    const cfg = await resolveConfigFromDraft(entryOf('gemini'), { apiKey: 'a' }, { purpose: 'list' });
+    fakes.permissions.granted.add('https://generativelanguage.googleapis.com/*');
+    mockFetch(response({ models: [{ name: 'models/a', supportedGenerationMethods: ['generateContent'] }] }));
+    await expect(listModels(cfg)).rejects.toMatchObject({ kind: 'invalid_output' });
+    expect(Object.keys(fakes.storage.dump()).some((k) => k.startsWith('modelMeta:'))).toBe(false);
+  });
+
+  it('key "a": an ordinary model list is accepted', async () => {
+    const cfg = await resolveConfigFromDraft(entryOf('gemini'), { apiKey: 'a' }, { purpose: 'list' });
+    fakes.permissions.granted.add('https://generativelanguage.googleapis.com/*');
+    mockFetch(response({ models: [{ name: 'models/gemini-a-1', displayName: 'A model', supportedGenerationMethods: ['generateContent'] }] }));
+    expect((await listModels(cfg)).models.map((m) => m.id)).toEqual(['gemini-a-1']);
+  });
+
   it('a 2–7 character key as a whole OBJECT KEY is rejected; inside a longer name it is not', () => {
     const cfg = { apiKey: 'tok5x', providerId: 'lmstudio', provider: 'LM Studio (local)' };
     expect(() => rejectEchoedKey(cfg, { 'tok5x': 1 })).toThrow(ProviderError);

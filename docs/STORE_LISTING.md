@@ -31,8 +31,8 @@ LCSH Recommendation Tool
 > **Use the AI you already pay for.** OpenAI, Google Gemini, Anthropic Claude,
 > DeepSeek, Qwen, Zhipu GLM, Moonshot Kimi, MiniMax, OpenRouter, a model
 > running in LM Studio on your own machine, or any OpenAI-compatible endpoint.
-> Your key is stored on your computer and is sent only to the provider it
-> belongs to.
+> Your key is stored on your computer and is sent only to the server address
+> you entered it for.
 >
 > **Or keep the AI on your computer.** Chrome's built-in Gemini Nano runs
 > on your device, so your text is not sent to an AI company. (The headings
