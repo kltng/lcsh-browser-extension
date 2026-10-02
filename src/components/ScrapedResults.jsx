@@ -13,6 +13,7 @@ import {
 } from './pipelineText';
 import { shownText } from '../services/keyGuard';
 import ConfidenceBadge from './ConfidenceBadge';
+import { isWorkflowRoute } from './route';
 import { useKnownKeys, KeysUnavailableNotice } from './useKnownKeys';
 
 /**
@@ -253,7 +254,7 @@ export const buildAndShowRecommendations = (workflow, setActiveStep) => {
 const ScrapedResults = () => {
   const {
     run, workflow, setActiveStep, localDbClient, viewEpoch = () => 0, focusRequest = null, clearFocusRequest = () => {},
-    noteNavigation = () => {}
+    noteNavigation = () => {}, isHistoryOpen = () => false
   } = useAppContext();
   const [notice, setNotice] = useState(null);
   const [focusNotice, setFocusNotice] = useState(null);
@@ -293,10 +294,16 @@ const ScrapedResults = () => {
     window.location.hash = 'settings';
   };
   const advance = () => setActiveStep(3);
-  // The Next continuation owns the Matches view only while no navigation happened.
+  // The Next continuation owns the Matches view only while no navigation
+  // happened (the epoch) AND, read live when it resumes, the location still
+  // shows the workflow and History is closed (ui-2c item 2): a browser hash
+  // change whose hashchange event is not delivered yet ends it too.
   const handleNext = () => {
     const epoch = viewEpoch();
-    workflow.next({ onAdvance: advance, stillOwned: () => viewEpoch() === epoch });
+    workflow.next({
+      onAdvance: advance,
+      stillOwned: () => viewEpoch() === epoch && isWorkflowRoute() && !isHistoryOpen()
+    });
   };
 
   return (

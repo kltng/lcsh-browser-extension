@@ -6,7 +6,9 @@ import { useAppContext } from '../context/AppContext';
 import { TEXT_FALLBACK_NOTICE, MAX_SUGGESTIONS } from '../services/pipeline/suggest';
 import { EDITABLE_KINDS, KIND_LABELS } from '../services/pipeline/suggestionEdits';
 import { SUGGESTION_NOTE, SUGGESTIONS_HEADING, DOWNSTREAM_WARNING, authorLabel } from './pipelineText';
-import { shownText, LOADING_TEXT } from '../services/keyGuard';
+import {
+  shownText, LOADING_TEXT, documentKeys, valueHasKey, textFields, keysState
+} from '../services/keyGuard';
 import { useKnownKeys, KeysUnavailableNotice } from './useKnownKeys';
 
 /** The kinds the editor offers for one suggestion (`unknown` only if it already has it). */
@@ -16,6 +18,25 @@ const kindOptions = (current) => (current === 'unknown' ? ['unknown', ...EDITABL
 export const HIDDEN_HEADING_NOTE = 'The original text is hidden because it repeats an API key.';
 /** The same, while the saved keys are still loading (the list shows "Loading…"). */
 export const LOADING_HEADING_NOTE = 'The original text is hidden until your saved settings have loaded.';
+/** Shown after a TYPED draft was emptied because it repeats an API key (ui-2c item 1). */
+export const DRAFT_HIDDEN_NOTE = 'The text was removed because it repeats an API key.';
+/** The same, after the saved keys could not be read (ui-2c item 3). */
+export const KEY_READ_FAILED_HEADING_NOTE = 'Your saved settings could not be read, so the original text is hidden.';
+
+/**
+ * The editor's note: why the input does not show the text, or null.
+ * @param {string} heading - The stored heading
+ * @param {boolean} hidden - The list hides the heading now
+ * @param {boolean} blanked - A typed draft was emptied because it repeats a key
+ * @returns {string|null}
+ */
+const keyNoteFor = (heading, hidden, blanked) => {
+  if (!hidden && !blanked) return null;
+  const state = keysState();
+  if (state === 'failed') return KEY_READ_FAILED_HEADING_NOTE;
+  if (state === 'loading' && shownText(heading) === LOADING_TEXT) return LOADING_HEADING_NOTE;
+  return hidden ? HIDDEN_HEADING_NOTE : DRAFT_HIDDEN_NOTE;
+};
 
 /**
  * Whether the key guard hides this heading in the list (hidden, or "Loading…"
@@ -26,17 +47,31 @@ export const LOADING_HEADING_NOTE = 'The original text is hidden until your save
 export const isHeadingHidden = (heading) => shownText(heading) !== heading;
 
 /**
+ * Whether a draft as DISPLAYED would repeat a known key, by the display
+ * guard's own fields and length rules (ui-2c item 1).
+ * @param {string} value - The draft
+ * @param {string[]} [keys] - Keys to check (default: every known key)
+ * @returns {boolean}
+ */
+export const draftShowsKey = (value, keys = documentKeys()) => typeof value === 'string' && value !== ''
+  && valueHasKey(textFields(value), keys);
+
+/**
  * The value shown in the editor input. The stored text of a hidden heading
- * never appears there, also when it becomes hidden while the editor is open;
- * a replacement text (hidden / "Loading…") is never used as a value.
+ * never appears there, and neither does ANY draft — untouched or typed —
+ * that repeats a known key, initially, after typing, or after the keys
+ * change while the editor is open. Such a value becomes EMPTY; a replacement
+ * text (hidden / "Loading…") is never used as a value.
  * @param {string|null} draft - What the user typed, or null when untouched
  * @param {string} heading - The stored heading
  * @param {boolean} hidden - isHeadingHidden(heading) now
+ * @param {string[]} [keys] - Keys to check (default: every known key)
  * @returns {string}
  */
-export const editorHeadingValue = (draft, heading, hidden) => {
+export const editorHeadingValue = (draft, heading, hidden, keys = documentKeys()) => {
   const value = draft ?? heading;
-  return hidden && value === heading ? '' : value;
+  if (hidden && value === heading) return '';
+  return draftShowsKey(value, keys) ? '' : value;
 };
 
 /**
@@ -54,8 +89,23 @@ const SuggestionEditor = ({ suggestion, onApply, onCancel, showWarning }) => {
   // unless that heading is hidden, when it starts EMPTY.
   const [draft, setDraft] = useState(() => (hidden ? '' : null));
   const heading = editorHeadingValue(draft, suggestion.heading, hidden);
+  // A typed draft that was emptied because it repeats a key stays empty, even
+  // if that key is later removed (the text is never shown again).
+  const blanked = draft !== null && draft !== '' && heading === '';
+  const [draftWasHidden, setDraftWasHidden] = useState(false);
+  useEffect(() => {
+    if (!blanked) return;
+    setDraft('');
+    setDraftWasHidden(true);
+  }, [blanked]);
+  const noteText = keyNoteFor(suggestion.heading, hidden, blanked || draftWasHidden);
   const [kind, setKind] = useState(suggestion.kind);
   const [error, setError] = useState(null);
+  const onChange = (e) => {
+    setDraft(e.target.value);
+    setDraftWasHidden(false);
+    setError(null);
+  };
   const apply = () => {
     // The replacement text is never sent: a hidden heading needs new text.
     const result = onApply({ type: 'edit', id: suggestion.id, heading, kind });
@@ -64,14 +114,10 @@ const SuggestionEditor = ({ suggestion, onApply, onCancel, showWarning }) => {
   return (
     <Box sx={{ width: '100%' }}>
       {showWarning && <Alert severity="warning" sx={{ mb: 1 }}>{DOWNSTREAM_WARNING}</Alert>}
-      {hidden && (
-        <Alert severity="info" sx={{ mb: 1 }}>
-          {shownText(suggestion.heading) === LOADING_TEXT ? LOADING_HEADING_NOTE : HIDDEN_HEADING_NOTE}
-        </Alert>
-      )}
+      {noteText && <Alert severity="info" sx={{ mb: 1 }}>{noteText}</Alert>}
       <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ alignItems: { sm: 'flex-start' } }}>
         <TextField
-          size="small" fullWidth label="Search heading" value={heading} onChange={(e) => { setDraft(e.target.value); setError(null); }}
+          size="small" fullWidth label="Search heading" value={heading} onChange={onChange}
           error={Boolean(error)} helperText={error || ' '} inputProps={{ 'aria-label': 'Search heading' }}
         />
         <TextField select size="small" label="Kind" value={kind} onChange={(e) => setKind(e.target.value)} sx={{ minWidth: 160 }}>

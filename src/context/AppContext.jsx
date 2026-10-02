@@ -95,7 +95,14 @@ export const AppProvider = ({
   const [activeStep, setActiveStepState] = useState(0);
   // UI round 1: the History VIEW opens over the workflow, like Settings. The
   // workflow stays mounted, and opening or closing it leaves no step.
-  const [historyOpen, setHistoryOpen] = useState(initialHistoryOpen);
+  const [historyOpen, setHistoryOpenState] = useState(initialHistoryOpen);
+  // ui-2c item 2: read LIVE by a resuming Next continuation (render state may be stale).
+  const historyOpenRef = useRef(initialHistoryOpen);
+  const setHistoryOpen = (open) => {
+    historyOpenRef.current = open;
+    setHistoryOpenState(open);
+  };
+  const isHistoryOpen = () => historyOpenRef.current;
   // SPEC-UI2 §1: every navigation (a step, History, Settings) raises the view
   // epoch, so a Next continuation started on Matches knows it no longer owns the view.
   const viewEpochRef = useRef(0);
@@ -215,6 +222,7 @@ export const AppProvider = ({
     activeStep,
     setActiveStep,
     historyOpen,
+    isHistoryOpen,
     openHistory,
     closeHistory,
     noteNavigation,

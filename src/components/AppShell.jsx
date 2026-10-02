@@ -14,7 +14,9 @@ import ConversationHistory from './ConversationHistory';
 
 /** The workflow steps (UI round 1: History is a view, not a step). */
 export const STEPS = ['Describe the work', 'AI suggestions', 'Matches', 'Recommendations'];
-export const SETTINGS_HASH = '#settings';
+import { SETTINGS_HASH } from './route';
+
+export { SETTINGS_HASH };
 
 const STEP_VIEWS = [BibliographicInfoForm, InitialSuggestions, ScrapedResults, FinalRecommendations];
 
