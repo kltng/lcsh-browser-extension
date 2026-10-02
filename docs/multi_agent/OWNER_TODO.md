@@ -60,6 +60,20 @@ Options: (a) accept it; (b) warm the database up quietly when the tab opens;
 (c) give SQLite a larger memory cache. My suggestion is (a) for this release.
 Details: docs/multi_agent/P5_ACCEPTANCE.md, §11 timings.
 
+## 4c. Before you merge or publish (Phase 6 results)
+
+- **Version number.** manifest.json still says 1.1.0. This is a large change;
+  2.0.0 is my suggestion. Your call.
+- **Old commits name two local config folders.** The privacy sweep removed
+  them from the current files, but earlier commits on this branch (already
+  pushed) still contain the folder names of the two Claude accounts on your
+  Mac. No keys, emails or IP addresses. I did not rewrite the pushed history,
+  because that is destructive. If you want them gone, squash the branch when
+  you merge it.
+- **Privacy policy and Store text were corrected** after the security review
+  (PRIVACY_POLICY.md, docs/STORE_LISTING.md). Please read them once before
+  you submit; they now promise only what the code does.
+
 ## 5. Decisions already recorded (no action needed)
 
 - Database profiles: `core` is the default; `full` is an advanced opt-in with
