@@ -10,7 +10,7 @@ import { subdivisionNote } from '../services/pipeline/select';
 import { copyAllText, recommendationsCsv, marcUnavailableText } from '../services/pipeline/exports';
 import { NONE_REASON_WORDS } from '../services/pipeline/types';
 import { needsNameKey } from '../services/pipeline/nameKeys';
-import { KeyEchoError, shownText, HIDDEN_TEXT } from '../services/keyGuard';
+import { KeyEchoError, shownText } from '../services/keyGuard';
 import { useKnownKeys } from './useKnownKeys';
 import { methodText, authorityLabel, lcLink, viaNote } from './pipelineText';
 
@@ -37,8 +37,9 @@ export const RecommendationsPanel = ({ recommendations, selections, suggestions,
   const headingOf = (id) => suggestions.find((s) => s.id === id)?.heading || id;
   const withoutHeadingLine = (id) => {
     const heading = headingOf(id);
-    const line = shownText(`${heading} (AI suggestion)`);
-    return shownText(heading) === HIDDEN_TEXT ? HIDDEN_TEXT : line;
+    const shownHeading = shownText(heading);
+    // The heading's own replacement (hidden, or "Loading…") wins; else the finished line's.
+    return shownHeading !== heading ? shownHeading : shownText(`${heading} (AI suggestion)`);
   };
   return (
     <Box>

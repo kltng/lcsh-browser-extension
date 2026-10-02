@@ -72,6 +72,12 @@ export const AppProvider = ({ children, localDbClient = null, localDbUpdates = n
   const [settingsStatus, setSettingsStatus] = useState('loading');
   const [settingsError, setSettingsError] = useState(null);
 
+  // P6 fix 13/15: the exit guard knows every stored key, kept current. It is
+  // started BEFORE the first render, so the views that hide key echoes show
+  // "Loading…" (not model text) until the stored keys have loaded once.
+  const keysWatchRef = useRef(null);
+  if (!keysWatchRef.current) keysWatchRef.current = watchStoredKeys({ readStoredApiKeys, onSettingsChanged });
+
   // The pipeline run (run.js state behind the workflow controller)
   const workflowRef = useRef(null);
   if (!workflowRef.current) workflowRef.current = createWorkflow({ loadConfig: loadActiveConfig, localClient: localDbClient });
@@ -112,8 +118,8 @@ export const AppProvider = ({ children, localDbClient = null, localDbUpdates = n
       setRulesState((state) => applyStoredRules(state, changes.systemPromptRules.newValue));
     });
 
-    // P6 fix 13: the exit guard knows every stored key, kept current.
-    const unsubscribeKeys = watchStoredKeys({ readStoredApiKeys, onSettingsChanged });
+    // A cleanup (React StrictMode) may have stopped the watcher; start it again.
+    if (!keysWatchRef.current) keysWatchRef.current = watchStoredKeys({ readStoredApiKeys, onSettingsChanged });
 
     loadHistory()
       .then((entries) => { if (alive) setConversationHistory(entries); })
@@ -123,7 +129,8 @@ export const AppProvider = ({ children, localDbClient = null, localDbUpdates = n
     return () => {
       alive = false;
       unsubscribeSettings();
-      unsubscribeKeys();
+      keysWatchRef.current?.();
+      keysWatchRef.current = null;
       unsubscribeHistory();
       workflow.dispose();
     };

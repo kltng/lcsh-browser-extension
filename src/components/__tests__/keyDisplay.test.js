@@ -13,7 +13,7 @@ import { RecommendationsPanel } from '../FinalRecommendations';
 import { V2EntryView, LegacyEntryView } from '../ConversationHistory';
 import { buildHistoryEntry, loadHistory } from '../../services/history';
 import { selectionsOf, buildRun } from '../../services/pipeline/run';
-import { rememberRunKey, setStoredKeys, resetKeyRegistry } from '../../services/keyGuard';
+import { rememberRunKey, setStoredKeys, resetKeyRegistry, watchStoredKeys } from '../../services/keyGuard';
 import { renderHtml, textOf } from '../../../test/render';
 import { builtRun, V110_ENTRY } from '../../../test/pipelineFixtures';
 import { fakes } from '../../../test/setup';
@@ -113,5 +113,54 @@ describe('[P6 fix14] history display (finding 3)', () => {
     const legacyText = textOf(renderHtml(LegacyEntryView, { entry: legacy, onCopy: () => {} }));
     expect(legacyText).toContain('Main topic');
     expect(legacyText).not.toContain(HIDDEN);
+  });
+});
+
+// P6 fix 15, item 1: nothing model-derived is shown before the stored keys
+// have loaded once.
+describe('[P6 fix15] history renders before the stored keys load', () => {
+  const KEY = 'sk-late-loaded-key-0099';
+
+  it('model fields are not shown until the keys are ready; then the clean ones appear and the echo is hidden', async () => {
+    let answer;
+    const stop = watchStoredKeys({
+      readStoredApiKeys: () => new Promise((resolve) => { answer = resolve; }),
+      onSettingsChanged: () => () => {}
+    });
+    const run = runWithHeading(`Motion pictures--Japan--History--${KEY}`);
+    const entry = buildHistoryEntry({ run, id: 'early', timestamp: '2026-09-01T00:00:00.000Z' });
+    await fakes.storage.local.set({ conversationHistory: [entry, V110_ENTRY] });
+    const [v2, legacy] = await loadHistory();
+
+    // Keys not loaded yet: neither the echo nor any other model text is shown.
+    const before = textOf(renderHtml(V2EntryView, { entry: v2 })) + textOf(renderHtml(LegacyEntryView, { entry: legacy, onCopy: () => {} }));
+    expect(before).not.toContain(KEY);
+    expect(before).not.toContain('Japanese film people.');
+    expect(before).not.toContain('Main topic');
+    expect(before).toContain('Loading…');
+
+    answer([KEY]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const after = textOf(renderHtml(V2EntryView, { entry: v2 })) + textOf(renderHtml(LegacyEntryView, { entry: legacy, onCopy: () => {} }));
+    expect(after).not.toContain(KEY);
+    expect(after).toContain(HIDDEN);
+    expect(after).toContain('Japanese film people.');
+    expect(after).toContain('Main topic');
+    expect(after).not.toContain('Loading…');
+    stop();
+  });
+});
+
+// P6 fix 15, item 3: each COMPLETE legacy line is checked, not only its parts.
+describe('[P6 fix15] legacy history lines are checked as assembled', () => {
+  it('key "abc; link def" from identifier "abc" and link "def" → the line is hidden', () => {
+    setStoredKeys(['abc; link def']);
+    const legacy = {
+      ...V110_ENTRY,
+      finalRecommendations: [{ ...V110_ENTRY.finalRecommendations[0], bestMatch: { ...V110_ENTRY.finalRecommendations[0].bestMatch, identifier: 'abc', uri: 'def' } }]
+    };
+    const text = textOf(renderHtml(LegacyEntryView, { entry: legacy, onCopy: () => {} }));
+    expect(text).not.toContain('abc; link def');
+    expect(text).toContain(HIDDEN);
   });
 });

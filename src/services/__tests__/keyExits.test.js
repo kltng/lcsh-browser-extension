@@ -174,6 +174,23 @@ describe('[P6 fix14] the selection request never carries a known key', () => {
     expect(wf.getState().select.error).toEqual({ kind: 'key_echo', message: 'The AI answer repeats an API key, so it was not used.' });
   });
 
+  // P6 fix 15, item 2: the FINISHED prompt is checked too.
+  it('a stored key "Cats" (kind: topical) that only the prompt FORMAT assembles → the select request is NOT sent', async () => {
+    const ASSEMBLED = 'Cats" (kind: topical)';
+    const settings = { lookupBackend: 'loc-api', providers: { custom: { apiKey: ASSEMBLED }, lmstudio: { apiKey: 'run-key-A-12345' } } };
+    mockLoc({ 'lcsh leftanchored "Cats"': [EVIDENCE.cats] });
+    const generateImpl = vi.fn()
+      .mockResolvedValueOnce(suggested('Cats'))
+      .mockResolvedValueOnce(answer({ selections: [{ suggestionId: 's1', choice: 's1c1', confidence: 90 }], additional: [] }));
+    const wf = make({ apiKey: 'run-key-A-12345', settings, generateImpl });
+    await wf.suggest({ bibliographicInfo: { title: 'T' }, rules: '' });
+    await wf.lookupAll();
+    expect(wf.getState().lookup.results.s1.candidates.length).toBeGreaterThan(0);
+    await wf.select();
+    expect(generateImpl).toHaveBeenCalledTimes(1);
+    expect(wf.getState().select.error).toMatchObject({ kind: 'key_echo' });
+  });
+
   it('an ordinary selection request is still sent', async () => {
     mockLoc({ 'lcsh leftanchored "Cats"': [EVIDENCE.cats] });
     const settings = { lookupBackend: 'loc-api', providers: { custom: { apiKey: 'sk-provider-c-key-0042' } } };

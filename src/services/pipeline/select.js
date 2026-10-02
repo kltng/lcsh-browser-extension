@@ -11,7 +11,7 @@ import { budgetBibliographic, candidateLimit, isNano, NANO_RETRY_CANDIDATES } fr
 import { levenshteinDistance } from '../../utils/similarityUtils';
 import { makeSelection } from './types';
 import { buildMarc } from './marc';
-import { guardExit, documentKeys } from '../keyGuard';
+import { guardExit, documentKeys, textFields } from '../keyGuard';
 
 /** ProviderError kinds that lead to the AUTOMATIC exact-only fallback (§5.2). */
 export const AUTO_FALLBACK_KINDS = new Set(['invalid_output', 'truncated', 'too_long']);
@@ -157,9 +157,15 @@ const callSelect = async (generateImpl, cfg, info, presentation, signal) => {
   // P6 fix 14 (finding 4): the selection request is a network exit. Nothing is
   // sent when its model-written text repeats the selection provider's key or
   // any other known key (every stored key, every key a run used).
-  guardExit('display', modelTextOfSelectRequest(presentation), [cfg?.apiKey, ...documentKeys()]);
+  const keys = [cfg?.apiKey, ...documentKeys()];
+  guardExit('display', modelTextOfSelectRequest(presentation), keys);
+  // P6 fix 15 (item 2): the FINISHED prompt too — exactly the text sent —
+  // because formatting can assemble a key from parts that pass on their own
+  // (heading `Cats` + kind `topical` → `"Cats" (kind: topical)`).
+  const prompt = buildSelectPrompt(info, presentation.presented);
+  guardExit('display', [prompt.system, prompt.userText, ...textFields(prompt.userText)], keys);
   const result = await generateImpl(cfg, {
-    ...buildSelectPrompt(info, presentation.presented),
+    ...prompt,
     schema: SELECT_SCHEMA, temperature: 0.1, maxOutputTokens: 2048, signal
   });
   const validated = validateSelectAnswer(result.json, presentation);

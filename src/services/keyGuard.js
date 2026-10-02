@@ -160,12 +160,39 @@ export const keysOfSettings = (settings) => Object.values(settings?.providers ||
  * Replace the stored keys.
  * @param {string[]} keys - Every key stored now
  */
-export const setStoredKeys = (keys) => {
+// P6 fix 15: readiness and ordering of the stored keys. A watcher makes the
+// registry NOT ready until its first read succeeded; views show no model text
+// before that. Every read takes a sequence number, and only a result newer
+// than the last applied one is used, so a stale read that finishes late never
+// overwrites a newer set.
+let ready = true;
+let loadedOnce = false;
+let readSeq = 0;
+let appliedSeq = 0;
+
+const applyStoredKeys = (keys, seq) => {
+  if (seq <= appliedSeq) return;
+  appliedSeq = seq;
+  loadedOnce = true;
   const next = usableKeys(keys);
-  if (next.length === storedKeys.length && next.every((k, i) => k === storedKeys[i])) return;
+  const same = next.length === storedKeys.length && next.every((k, i) => k === storedKeys[i]);
   storedKeys = next;
+  if (!ready) ready = true;
+  else if (same) return;
   keysChanged();
 };
+
+/**
+ * Replace the stored keys with a set read just now (it counts as the newest).
+ * @param {string[]} keys - Every key stored now
+ */
+export const setStoredKeys = (keys) => {
+  readSeq += 1;
+  applyStoredKeys(keys, readSeq);
+};
+
+/** Whether the stored keys have loaded at least once (or no watcher is waiting for them). */
+export const keysReady = () => ready;
 
 /**
  * The keys for exits (a) and (b): every run key of this document plus every
@@ -181,7 +208,26 @@ export const documentKeys = () => [...new Set([...runKeys, ...storedKeys])];
  */
 export const watchStoredKeys = ({ readStoredApiKeys, onSettingsChanged }) => {
   let alive = true;
-  const refresh = () => readStoredApiKeys().then((keys) => { if (alive) setStoredKeys(keys); }).catch(() => {});
+  if (!loadedOnce && ready) {
+    ready = false;
+    keysChanged();
+  }
+  const refresh = () => {
+    readSeq += 1;
+    const seq = readSeq;
+    let reading;
+    try {
+      reading = Promise.resolve(readStoredApiKeys());
+    } catch (err) {
+      reading = Promise.reject(err);
+    }
+    return reading
+      .then((keys) => { if (alive) applyStoredKeys(keys, seq); })
+      .catch(() => {
+        // The last good set is kept. Local text only: never the error or a key.
+        console.error('[keys] The stored API keys could not be read; the last known set is kept.');
+      });
+  };
   refresh();
   const stop = onSettingsChanged((changes) => {
     if (Object.keys(changes).some((k) => k.startsWith('provider:') || k === 'geminiApiKey')) refresh();
@@ -207,12 +253,21 @@ export const HIDDEN_TEXT = 'Hidden: this text repeats an API key.';
  */
 export const shownText = (text, keys = documentKeys()) => {
   if (typeof text !== 'string' || text === '') return text;
+  // Before the stored keys have loaded once, nothing model-derived is shown.
+  if (!ready) return LOADING_TEXT;
   return valueHasKey(textFields(text), keys) ? HIDDEN_TEXT : text;
 };
 
-/** Forget every key (tests). */
+/** Shown instead of model-derived text until the stored keys have loaded once. */
+export const LOADING_TEXT = 'Loading…';
+
+/** Forget every key and reset readiness (tests). */
 export const resetKeyRegistry = () => {
   runKeys.clear();
   storedKeys = [];
+  ready = true;
+  loadedOnce = false;
+  readSeq = 0;
+  appliedSeq = 0;
   keysChanged();
 };

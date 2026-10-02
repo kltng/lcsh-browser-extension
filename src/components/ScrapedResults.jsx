@@ -8,7 +8,7 @@ import { FALLBACK_BANNER } from '../services/pipeline/select';
 import { fallbackNotice } from '../services/lookup/index';
 import { getSettings } from '../services/settings';
 import { outcomeLine, choiceText, authorityLabel, lcLink, sourceLine, viaNote, replacementNoteText } from './pipelineText';
-import { shownText, HIDDEN_TEXT } from '../services/keyGuard';
+import { shownText } from '../services/keyGuard';
 import { useKnownKeys } from './useKnownKeys';
 
 /**
@@ -56,9 +56,13 @@ export const MatchesPanel = ({
       const result = results[s.id];
       const selection = selections.find((x) => x.suggestionId === s.id);
       const candidates = result?.candidates || [];
-      // The finished line, and the heading alone (a 1-character key matches only a whole value).
-      const headingHidden = shownText(`${s.heading} (AI suggestion · ${s.kind})`) === HIDDEN_TEXT
-        || shownText(s.heading) === HIDDEN_TEXT;
+      // The finished line, and the heading alone (a 1-character key matches only
+      // a whole value). A replacement (hidden, or "Loading…" before the keys
+      // have loaded) is shown instead of the whole line.
+      const line = `${s.heading} (AI suggestion · ${s.kind})`;
+      const lineShown = shownText(line);
+      const headingShown = shownText(s.heading);
+      const headingReplacement = lineShown !== line ? lineShown : (headingShown !== s.heading ? headingShown : null);
       const droppedNote = selection?.cid && selection.droppedSubdivisions.length > 0
         ? shownText(`The selected heading does not include these suggested subdivisions: ${selection.droppedSubdivisions.join(', ')}`)
         : null;
@@ -66,7 +70,7 @@ export const MatchesPanel = ({
         <Card key={s.id} variant="outlined" sx={{ mb: 2 }}>
           <CardContent>
             <Typography variant="subtitle1">
-              {headingHidden ? HIDDEN_TEXT : (
+              {headingReplacement !== null ? headingReplacement : (
                 <>
                   {s.heading} <Typography component="span" variant="caption" color="text.secondary">(AI suggestion · {s.kind})</Typography>
                 </>

@@ -67,11 +67,12 @@ the full offline database, a chosen name's MARC field is fetched from
 
 ### 3. Hugging Face (only if you use the offline database)
 
-The offline database is optional. The extension contacts `huggingface.co`
-and its content delivery network only when you install, repair or update the
-database, when you click "Check for a new release", and — once you have a
-database installed — once a day to see if a newer release exists. Without an
-installed database it never contacts Hugging Face on its own.
+The offline database is optional. The extension contacts Hugging Face and
+its content delivery network when you install, repair or update the
+database or request a release check. With a database installed, it also
+checks when the extension opens if no successful check is recorded within
+the previous 24 hours; unsuccessful checks may be retried on later openings.
+Without an installed database it never contacts Hugging Face on its own.
 
 These requests do **not** include anything you typed: they are plain file
 downloads. Hugging Face and its network receive the ordinary technical
@@ -89,9 +90,12 @@ Everything is stored by Chrome on your computer:
   *Safety net, not a guarantee:* an AI service could repeat a key in its
   answer. The extension looks for your stored keys in AI answers and in what
   it is about to send, show, save or export, and stops or hides the text if
-  it finds one. This check can miss cases: keys of 2–7 characters are found
-  only as separate words, a 1-character key only when it is the whole text,
-  and it cannot recognise a key you have already deleted. Keys saved by
+  it finds one. This check can miss cases: keys of 2–7 characters require
+  word boundaries, and one-character keys require equality with an entire
+  checked value or field. Deleted keys may remain recognisable in an open
+  extension page that used them, but are not reliably recognisable after
+  that page closes. While a page is starting, or if your stored keys cannot
+  be read, the check may not know your keys yet. Keys saved by
   version 1.x of the extension are assumed to belong to the server they are
   saved with. Use a long key for any AI service that is not on your own
   computer.

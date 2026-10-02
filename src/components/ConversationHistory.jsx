@@ -19,6 +19,25 @@ import { RecommendationsPanel } from './FinalRecommendations';
 
 const formatDate = (dateString) => (dateString ? new Date(dateString).toLocaleString() : '');
 
+/**
+ * P6 fix 15 (item 3): a COMPLETE assembled display line, checked as a whole
+ * and through each model-written part (a 1-character key matches only a whole
+ * value). The first replacement found (hidden, or "Loading…") is shown
+ * instead of the whole line.
+ * @param {string} line - The finished line
+ * @param {string[]} parts - Its model-written parts
+ * @returns {string}
+ */
+const shownLine = (line, parts) => {
+  for (const part of parts) {
+    if (typeof part === 'string' && part !== '') {
+      const shown = shownText(part);
+      if (shown !== part) return shown;
+    }
+  }
+  return shownText(line);
+};
+
 // A provenance field ({providerId, model} or null; missing in v1.1.0 entries)
 const formatProvenance = (label, provenance) => (
   provenance ? `${label}: ${provenance.providerId} (${provenance.model})` : ''
@@ -96,12 +115,15 @@ export const LegacyEntryView = ({ entry, onCopy }) => {
             <ListItem key={index} divider sx={{ display: 'block' }}>
               <Typography variant="body2" fontWeight="medium">{shownText(item.heading)}</Typography>
               <Typography variant="caption" color="text.secondary" component="div">
-                {LEGACY_TEXT_LABEL}: identifier {shownText(item.identifier) || 'none'}; link {shownText(item.link) || 'none'}
-                {item.similarity !== null ? `; spelling score ${item.similarity}%` : ''}
+                {shownLine(
+                  `${LEGACY_TEXT_LABEL}: identifier ${item.identifier || 'none'}; link ${item.link || 'none'}`
+                    + `${item.similarity !== null ? `; spelling score ${item.similarity}%` : ''}`,
+                  [item.identifier, item.link]
+                )}
               </Typography>
               {item.justification && (
                 <Typography variant="caption" color="text.secondary" component="div">
-                  {LEGACY_TEXT_LABEL}: {shownText(item.justification)}
+                  {shownLine(`${LEGACY_TEXT_LABEL}: ${item.justification}`, [item.justification])}
                 </Typography>
               )}
               {item.marc && (
