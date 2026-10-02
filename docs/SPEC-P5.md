@@ -1,6 +1,6 @@
 # SPEC-P5 — Local LCSH database in the extension
 
-Status: v2.6, 2026-10-01 (round 2 §17; round 3 §18; live findings §19; reviewer edits to them §20; fault-injection test build §21). v1 was REJECTED (14 findings, 4 HIGH;
+Status: v2.7, 2026-10-02 (round 2 §17; round 3 §18; live findings §19; reviewer edits to them §20; fault-injection test build §21; gzip decode failure = damaged §4.4 step 4). v1 was REJECTED (14 findings, 4 HIGH;
 `.dispatch/spec-review-p5-1/last_message.md`; v1 archived at
 `.dispatch/SPEC-P5.v1.md`). §16 maps each finding to its fix. Builds on
 SPEC-P4 (lookup step, Candidate, honesty rule) and the builder contract
@@ -275,7 +275,12 @@ result is shown, not required).
    checked in a fresh profile without optional grants (§13).
 3. Pass-through 1: compressed byte count + `sha256_gz`. Abort as soon as the
    count exceeds `gz_size`.
-4. `DecompressionStream('gzip')`.
+4. `DecompressionStream('gzip')`. A decoding failure (invalid or truncated
+   gzip data in a body that the network delivered without error) is
+   `damaged`, not `network`: the bytes received do not match the release.
+   Only an error of the HTTP response body itself (connection lost, reset)
+   is `network` (or `network_stalled` per step 8). (v2.7, live §13 row 8:
+   one flipped byte showed "Check your connection".)
 5. Pass-through 2: decompressed byte count + `sha256_db`. Abort as soon as it
    exceeds `db_size`.
 6. `poolUtil.importDb(stagingName, pull)`; `pull` returns the next chunk or
