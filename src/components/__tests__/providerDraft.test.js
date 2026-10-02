@@ -4,8 +4,9 @@ import {
   beginSave, endSave, savedOrigin, watchSavedAccess, runGestureAction
 } from '../providerDraft';
 import { saveProviderDraft, onSettingsChanged, providerKey } from '../../services/settings';
-import { resolveConfigFromDraft } from '../../services/providers/config';
-import { generate } from '../../services/providers/index';
+import { resolveConfigFromDraft, resolveConfig } from '../../services/providers/config';
+import { getSettings } from '../../services/settings';
+import { generate, listModels } from '../../services/providers/index';
 import { TEST_SCHEMA } from '../../services/providers/schema';
 import { fakes, response, flushEvents, gate } from '../../../test/setup';
 import {
@@ -51,15 +52,25 @@ describe('[row 17] stale drafts: the form-state helpers (UI behavior: live verif
     expect(applyStoredChange(form, { apiKey: 'k' })).toBe(form);
     const saved = afterSave(form, { saved: true, value: { apiKey: 'k', model: 'm' } });
     expect(saved).toEqual({
-      base: { apiKey: 'k', model: 'm' }, draft: draftFromStored({ apiKey: 'k', model: 'm' }), dirty: false, stale: false, locked: false
+      base: { apiKey: 'k', model: 'm' }, draft: draftFromStored({ apiKey: 'k', model: 'm' }), dirty: false, stale: false, locked: false,
+      keyCleared: false
     });
   });
 
   it('patchFromDraft sends only the fields the provider uses', () => {
     const draft = { region: 'cn', apiKey: 'k', baseURL: 'https://x/v1', model: 'm', jsonMode: 'prompt', imagesOverride: true };
-    expect(patchFromDraft(entryOf('openai'), draft)).toEqual({ apiKey: 'k', model: 'm', imagesOverride: true });
-    expect(patchFromDraft(entryOf('qwen'), draft)).toEqual({ apiKey: 'k', model: 'm', region: 'cn', imagesOverride: true });
-    expect(patchFromDraft(entryOf('custom'), draft)).toEqual({ apiKey: 'k', model: 'm', baseURL: 'https://x/v1', jsonMode: 'prompt', imagesOverride: true });
+    // P6 fix 11: the key is saved with the origin it belongs to.
+    expect(patchFromDraft(entryOf('openai'), draft)).toEqual({
+      apiKey: 'k', keyOrigin: 'https://api.openai.com', model: 'm', imagesOverride: true
+    });
+    expect(patchFromDraft(entryOf('qwen'), draft)).toEqual({
+      apiKey: 'k', keyOrigin: 'https://dashscope.aliyuncs.com', model: 'm', region: 'cn', imagesOverride: true
+    });
+    expect(patchFromDraft(entryOf('custom'), draft)).toEqual({
+      apiKey: 'k', keyOrigin: 'https://x', model: 'm', baseURL: 'https://x/v1', jsonMode: 'prompt', imagesOverride: true
+    });
+    // No key → no key origin is kept.
+    expect(patchFromDraft(entryOf('openai'), { ...draft, apiKey: '' }).keyOrigin).toBe('');
   });
 });
 
@@ -258,5 +269,96 @@ describe('[P4 row 16] P3 queued fixes: a denied Save keeps the typed draft', () 
     const { ui, opts } = harness({});
     runGestureAction(entryOf('deepseek'), ui.form.draft, vi.fn(), opts());
     expect(fakes.permissions.request).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Security review (Phase 6) finding 1: an API key is only ever sent to the
+// ORIGIN it was entered for.
+describe('[P6 fix11] a key is bound to the origin of its endpoint', () => {
+  const custom = entryOf('custom');
+  const A = 'https://a.example/v1';
+  const B = 'https://b.example/v1';
+  const savedA = { baseURL: A, apiKey: KEY, model: 'm1', keyOrigin: 'https://a.example' };
+  const grant = (...origins) => origins.forEach((o) => fakes.permissions.granted.add(`${o}/*`));
+  /** Record every request; answer an OpenAI-style model list. */
+  const listing = () => {
+    globalThis.fetch = vi.fn(async () => response({ object: 'list', data: [{ id: 'm1' }] }));
+    return globalThis.fetch;
+  };
+  const credentialOf = (call) => {
+    const headers = call?.[1]?.headers || {};
+    return headers.Authorization ?? headers.authorization ?? null;
+  };
+
+  it('changing the ORIGIN clears the key: Load models then sends NO credential', async () => {
+    grant('https://a.example', 'https://b.example');
+    let state = initialDraftState(savedA);
+    state = editDraft(state, 'baseURL', B, custom);
+    expect(state.draft.apiKey).toBe('');
+    expect(state.keyCleared).toBe(true);
+    const fetchMock = listing();
+    const cfg = await resolveConfigFromDraft(custom, state.draft, { purpose: 'list' });
+    expect(cfg.apiKey).toBeNull();
+    await listModels(cfg);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toBe(`${B}/models`);
+    expect(credentialOf(fetchMock.mock.calls[0])).toBeNull();
+    // Saving it stores no key for B.
+    expect(patchFromDraft(custom, state.draft).apiKey).toBe('');
+  });
+
+  it('even a draft that kept the old key cannot send it to the new origin', async () => {
+    grant('https://b.example');
+    const fetchMock = listing();
+    const moved = { ...draftFromStored(savedA), baseURL: B };
+    await expect(resolveConfigFromDraft(custom, moved, { purpose: 'list' })).rejects.toMatchObject({ kind: 'not_configured' });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('a PATH change on the same origin keeps the key, and the key is sent there', async () => {
+    grant('https://a.example');
+    let state = initialDraftState(savedA);
+    state = editDraft(state, 'baseURL', 'https://a.example/api/v2', custom);
+    expect(state.draft.apiKey).toBe(KEY);
+    expect(state.keyCleared).toBeFalsy();
+    const fetchMock = listing();
+    await listModels(await resolveConfigFromDraft(custom, state.draft, { purpose: 'list' }));
+    expect(fetchMock.mock.calls[0][0]).toBe('https://a.example/api/v2/models');
+    expect(credentialOf(fetchMock.mock.calls[0])).toBe(`Bearer ${KEY}`);
+  });
+
+  it('a key typed for the new origin is bound to it and saved with it', async () => {
+    let state = initialDraftState(savedA);
+    state = editDraft(state, 'baseURL', B, custom);
+    state = editDraft(state, 'apiKey', 'sk-new-key-for-b-123', custom);
+    expect(state.draft.keyOrigin).toBe('https://b.example');
+    expect(patchFromDraft(custom, state.draft)).toMatchObject({ apiKey: 'sk-new-key-for-b-123', keyOrigin: 'https://b.example' });
+  });
+
+  it('a SAVED entry whose origin does not match its key\'s origin is refused for generation and listing', async () => {
+    grant('https://b.example');
+    const fetchMock = listing();
+    const mismatched = { baseURL: B, apiKey: KEY, model: 'm1', keyOrigin: 'https://a.example' };
+    await fakes.storage.local.set({ [providerKey('custom')]: mismatched, activeProviderId: 'custom' });
+    // Generation builds its config from the SAVED settings with resolveConfig().
+    await expect(resolveConfig(await getSettings(), 'custom', { purpose: 'generate' }))
+      .rejects.toMatchObject({ kind: 'not_configured' });
+    await expect(resolveConfigFromDraft(custom, mismatched, { purpose: 'list' })).rejects.toMatchObject({ kind: 'not_configured' });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('a key saved BEFORE keys were bound (no keyOrigin) is cleared by an origin change too', async () => {
+    let state = initialDraftState({ baseURL: A, apiKey: KEY, model: 'm1' });
+    state = editDraft(state, 'baseURL', B, custom);
+    expect(state.draft.apiKey).toBe('');
+    state = editDraft(initialDraftState({ baseURL: A, apiKey: KEY, model: 'm1' }), 'baseURL', `${A}/other`, custom);
+    expect(state.draft.apiKey).toBe(KEY);
+  });
+
+  it('a region change that changes the origin clears the key too', () => {
+    const qwen = entryOf('qwen');
+    let state = initialDraftState({ apiKey: KEY, region: 'intl', keyOrigin: 'https://dashscope-intl.aliyuncs.com' });
+    state = editDraft(state, 'region', 'cn', qwen);
+    expect(state.draft.apiKey).toBe('');
   });
 });

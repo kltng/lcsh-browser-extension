@@ -27,6 +27,7 @@ import {
 } from './providerDraft';
 
 const STALE_MESSAGE = 'Settings changed in another tab — reload them.';
+export const KEY_CLEARED_MESSAGE = 'The server address changed, so the API key was cleared. Enter the key for the new server.';
 const JSON_MODE_LABELS = {
   json_schema: 'JSON Schema (strict)',
   json_object: 'JSON object',
@@ -82,8 +83,10 @@ const ProviderSettings = ({ entry, stored, modelMeta, isActive }) => {
   const modelOptions = (models || metaEntry?.models || []).map((m) => m.id);
   const showMessages = form.stale ? [{ severity: 'warning', text: STALE_MESSAGE }, ...messages] : messages;
 
+  // The entry is passed so an endpoint change that changes the origin clears
+  // the key (P6 security review finding 1).
   const handleField = (field) => (e) => {
-    setForm((state) => editDraft(state, field, e.target.value));
+    setForm((state) => editDraft(state, field, e.target.value, entry));
   };
 
   // The gesture rule: validation, origin and chrome.permissions.request happen first, synchronously.
@@ -210,6 +213,9 @@ const ProviderSettings = ({ entry, stored, modelMeta, isActive }) => {
           )
         }}
       />
+      {form.keyCleared && !draft.apiKey && (
+        <Alert severity="info" sx={{ mb: 2 }}>{KEY_CLEARED_MESSAGE}</Alert>
+      )}
       {entry.keyHelpUrl && (
         <Typography variant="caption" sx={{ display: 'block', mb: 2 }}>
           <Link href={entry.keyHelpUrl} target="_blank" rel="noopener noreferrer">Get an API key</Link>
@@ -225,7 +231,7 @@ const ProviderSettings = ({ entry, stored, modelMeta, isActive }) => {
           inputValue={draft.model} disabled={locked}
           onInputChange={(e, value, reason) => {
             if (reason === 'reset' && !value) return;
-            setForm((state) => (state.draft.model === value ? state : editDraft(state, 'model', value)));
+            setForm((state) => (state.draft.model === value ? state : editDraft(state, 'model', value, entry)));
           }}
           renderInput={(params) => (
             <TextField {...params} label="Model" placeholder={entry.defaultModel || 'Type or load a model name'} />
@@ -247,7 +253,7 @@ const ProviderSettings = ({ entry, stored, modelMeta, isActive }) => {
       {!caps.imagesKnown && (
         <FormControlLabel
           sx={{ mb: 2 }}
-          control={<Checkbox checked={draft.imagesOverride} disabled={locked} onChange={(e) => setForm((state) => editDraft(state, 'imagesOverride', e.target.checked))} />}
+          control={<Checkbox checked={draft.imagesOverride} disabled={locked} onChange={(e) => setForm((state) => editDraft(state, 'imagesOverride', e.target.checked, entry))} />}
           label="This model can read images (the provider does not say)"
         />
       )}
@@ -261,7 +267,7 @@ const ProviderSettings = ({ entry, stored, modelMeta, isActive }) => {
         </Alert>
       ))}
       {suggestedMode && entry.json === 'user-choice' && (
-        <Alert severity="info" sx={{ mb: 1 }} action={<Button color="inherit" size="small" disabled={busy} onClick={() => setForm((state) => editDraft(state, 'jsonMode', suggestedMode))}>Use it</Button>}>
+        <Alert severity="info" sx={{ mb: 1 }} action={<Button color="inherit" size="small" disabled={busy} onClick={() => setForm((state) => editDraft(state, 'jsonMode', suggestedMode, entry))}>Use it</Button>}>
           Suggested JSON mode: {JSON_MODE_LABELS[suggestedMode]}. Save to keep it.
         </Alert>
       )}

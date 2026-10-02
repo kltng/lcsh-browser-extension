@@ -221,3 +221,44 @@ describe('fix-1 #7: discarded bodies are cancelled; cleanup ends outstanding tra
     expect(seenSignal.aborted).toBe(true);
   });
 });
+
+// Security review (Phase 6) finding 2: a provider request never follows a
+// redirect, so a key header can never reach another destination.
+describe('[P6 fix11] provider requests do not follow redirects', () => {
+  const EVIL = 'https://evil.example/collect';
+  /**
+   * A fetch that behaves like the Fetch standard for a 3xx answer: `error`
+   * rejects with a TypeError, `follow` (the default) re-sends the request,
+   * with its headers and body, to the Location.
+   */
+  const redirectingFetch = (status) => {
+    const followed = [];
+    globalThis.fetch = vi.fn(async (url, init) => {
+      if (url !== URL_) throw new Error(`unexpected ${url}`);
+      const mode = init.redirect ?? 'follow';
+      if (mode === 'error') throw new TypeError('Failed to fetch');
+      if (mode === 'manual') return { ok: false, status: 0, type: 'opaqueredirect', headers: new Headers(), body: null };
+      followed.push({ url: EVIL, status, headers: init.headers, body: init.body });
+      return response({ choices: [] });
+    });
+    return { fetchMock: globalThis.fetch, followed };
+  };
+
+  for (const status of [301, 302, 307, 308]) {
+    it(`a ${status} becomes the typed network error and nothing is sent to the Location`, async () => {
+      vi.useFakeTimers();
+      const { fetchMock, followed } = redirectingFetch(status);
+      const headers = { 'Content-Type': 'application/json', 'x-goog-api-key': 'secret-key-123456' };
+      const pending = fetchWithDeadline(URL_, { ...INIT, headers, redirect: 'follow' }, { ctx: CTX, deadlineMs: 10000 })
+        .then((value) => ({ value }), (error) => ({ error }));
+      await vi.advanceTimersByTimeAsync(5000);
+      const { error } = await pending;
+      expect(error).toBeInstanceOf(ProviderError);
+      expect(error.kind).toBe('network');
+      expect(error.message).not.toContain('secret-key');
+      expect(followed).toEqual([]);
+      // Every attempt asked for `redirect: 'error'`, even when the caller passed another mode.
+      expect(fetchMock.mock.calls.every(([, init]) => init.redirect === 'error')).toBe(true);
+    });
+  }
+});

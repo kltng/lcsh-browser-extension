@@ -130,7 +130,12 @@ export const fetchWithDeadline = async (url, init, opts) => {
           signal: op.signal,
           credentials: 'omit',
           referrerPolicy: 'no-referrer',
-          cache: 'no-store'
+          cache: 'no-store',
+          // P6 security review finding 2: never follow a redirect. A key in a
+          // custom header (x-goog-api-key, x-api-key) is not stripped by Fetch
+          // on a cross-origin redirect, so a 3xx must end the request. Fetch
+          // rejects with a TypeError, which becomes the typed `network` error.
+          redirect: 'error'
         }), op.signal);
       } catch (err) {
         if (op.reason()) throw abortError(op, ctx);

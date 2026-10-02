@@ -148,8 +148,15 @@ export const createLocalQueries = (query) => ({
     };
     const preferred = await run('Q3a');
     const seen = new Set(preferred.map((r) => r.id));
-    const variants = await run('Q3b');
-    return { rows: [...preferred, ...variants.filter((r) => !seen.has(r.id))], ran: errors.length === 0, errors };
+    const variants = (await run('Q3b')).filter((r) => !seen.has(r.id));
+    // P6 review (correctness) finding 1: a row found ONLY by Q3b matched a
+    // variant label; a row found by both keeps its preferred-label match.
+    return {
+      rows: [...preferred, ...variants],
+      variantOnlyIds: new Set(variants.map((r) => r.id)),
+      ran: errors.length === 0,
+      errors
+    };
   },
   /**
    * Q4 — the one-hop replacements of a deprecated row. `authority` is not part

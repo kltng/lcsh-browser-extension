@@ -2,7 +2,7 @@
  * Pure helpers for the Settings draft form (SPEC-P3 §2 stale-draft rule, §5.4).
  */
 import { sameProviderValue } from '../services/settings';
-import { baseURLFor } from '../services/providers/capabilities';
+import { baseURLFor, endpointOrigin, keyOriginOf } from '../services/providers/capabilities';
 import { originFor, requestAccess, hasAccess } from '../services/providers/permissions';
 
 const DRAFT_FIELDS = ['region', 'apiKey', 'baseURL', 'model', 'jsonMode'];
@@ -16,6 +16,10 @@ export const draftFromStored = (stored = {}) => {
   const draft = {};
   for (const field of DRAFT_FIELDS) draft[field] = typeof stored?.[field] === 'string' ? stored[field] : '';
   draft.imagesOverride = stored?.imagesOverride === true;
+  // P6 fix 11: the origin the saved key was entered for ('' = not recorded).
+  draft.keyOrigin = typeof stored?.keyOrigin === 'string' ? stored.keyOrigin : '';
+  // A key typed while the endpoint was not yet valid; bound to the first valid one.
+  draft.keyPending = false;
   return draft;
 };
 
@@ -29,7 +33,8 @@ export const initialDraftState = (stored = {}) => ({
   draft: draftFromStored(stored),
   dirty: false,
   stale: false,
-  locked: false
+  locked: false,
+  keyCleared: false
 });
 
 /**
@@ -61,17 +66,58 @@ export const applyStoredChange = (state, stored) => {
 };
 
 /**
- * Edit one draft field.
+ * Apply the key-origin binding to one edit (P6 security review finding 1).
+ * Typing a key binds it to the endpoint's current origin. An endpoint edit
+ * (base URL or region) that changes the origin CLEARS the key, which must
+ * then be entered again; a path change on the same origin keeps it.
+ */
+const bindKey = (entry, before, draft, field) => {
+  const next = { ...draft };
+  let cleared = false;
+  if (field === 'apiKey') {
+    const origin = endpointOrigin(entry, next);
+    const typed = typeof next.apiKey === 'string' && next.apiKey.trim() !== '';
+    next.keyOrigin = typed && origin ? origin : '';
+    next.keyPending = typed && !origin;
+    return { draft: next, cleared };
+  }
+  if (field !== 'baseURL' && field !== 'region') return { draft: next, cleared };
+  if (!(typeof next.apiKey === 'string' && next.apiKey.trim())) return { draft: next, cleared };
+  const origin = endpointOrigin(entry, next);
+  if (before.keyPending) {
+    // The key was typed before any valid endpoint: it belongs to the first one.
+    if (origin) {
+      next.keyOrigin = origin;
+      next.keyPending = false;
+    }
+    return { draft: next, cleared };
+  }
+  if (keyOriginOf(entry, before) !== origin) {
+    next.apiKey = '';
+    next.keyOrigin = '';
+    next.keyPending = false;
+    cleared = true;
+  }
+  return { draft: next, cleared };
+};
+
+/**
+ * Edit one draft field. With the registry `entry`, an endpoint change that
+ * changes the origin clears the key (see bindKey); every provider form passes it.
  * @param {object} state - Form state
  * @param {string} field - Field name
  * @param {any} value - New value
+ * @param {object} [entry] - Registry entry of the form's provider
  * @returns {object} - Next form state
  */
-export const editDraft = (state, field, value) => (state.locked ? state : {
-  ...state,
-  draft: { ...state.draft, [field]: value },
-  dirty: true
-});
+export const editDraft = (state, field, value, entry = null) => {
+  if (state.locked) return state;
+  const edited = { ...state.draft, [field]: value };
+  if (!entry || entry.adapter === 'chrome-nano') return { ...state, draft: edited, dirty: true };
+  const { draft, cleared } = bindKey(entry, state.draft, edited, field);
+  const keyCleared = field === 'apiKey' ? false : (cleared || state.keyCleared === true);
+  return { ...state, draft, dirty: true, keyCleared };
+};
 
 /**
  * Form state after a save attempt (also unlocks the form).
@@ -90,7 +136,11 @@ export const afterSave = (state, result) => (
  * @returns {object}
  */
 export const patchFromDraft = (entry, draft) => {
-  const patch = { apiKey: draft.apiKey, model: draft.model };
+  // The key is saved with the origin it belongs to ('' removes a stale one).
+  // A key saved before keys were bound gets its origin now when it is known
+  // (a fixed provider endpoint); a user-typed endpoint's old key stays unbound.
+  const keyOrigin = draft.apiKey ? (draft.keyOrigin || keyOriginOf(entry, draft) || '') : '';
+  const patch = { apiKey: draft.apiKey, keyOrigin, model: draft.model };
   if (entry.regionSelectable) patch.region = draft.region;
   if (entry.id === 'custom' || entry.id === 'lmstudio') patch.baseURL = draft.baseURL;
   if (entry.json === 'user-choice') patch.jsonMode = draft.jsonMode;

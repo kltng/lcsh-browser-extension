@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import util from 'node:util';
-import { ProviderError, errorFromStatus } from '../errors';
+import { ProviderError, errorFromStatus, rejectEchoedKey } from '../errors';
 import { generate } from '../index';
 import { resolveConfigFromDraft } from '../config';
 import { listModels } from '../models';
@@ -212,7 +212,8 @@ describe('fix-1 #1: successful answers that echo the key', () => {
   });
 });
 
-describe('fix-2 #1: keys shorter than 8 characters are not checked', () => {
+// (Short keys are checked since P6 fix 11b — see below — but never reject ordinary answers.)
+describe('fix-2 #1: a short key does not reject ordinary answers', () => {
   it('a short key ("a"): normal generation and normal model listing succeed', async () => {
     const cfg = await makeCfg('lmstudio', { apiKey: 'a' });
     mockFetch(response(successBody('openai-style', 'A normal answer about cats and a lamp.')));
@@ -246,5 +247,60 @@ describe('fix-2 #1: keys shorter than 8 characters are not checked', () => {
       expect(fetchMock).toHaveBeenCalledTimes(1);
       expect(fetchMock.mock.calls[0][0]).not.toContain(KEY8);
     });
+  });
+});
+
+// Security review (Phase 6) finding 5, lead decision B: short keys are
+// checked too, without rejecting ordinary answers.
+describe('[P6 fix11b] short keys: whole tokens (2–7 characters), equality (1 character)', () => {
+  const answerWith = (over) => JSON.stringify({ ...VALID_TEST_ANSWER, ...over });
+  const headingOf = (heading) => answerWith({ terms: [{ ...VALID_TEST_ANSWER.terms[0], heading }] });
+  const run = async (apiKey, text, schema = TEST_SCHEMA) => {
+    const cfg = await makeCfg('lmstudio', { apiKey });
+    mockFetch(response(successBody('openai-style', text)));
+    return generate(cfg, { ...REQ, schema }).then((value) => ({ value }), (error) => ({ error }));
+  };
+
+  it('a 7-character key echoed as a heading → rejected', async () => {
+    const { error } = await run('k7sEcrt', headingOf('k7sEcrt'));
+    expect(error).toMatchObject({ kind: 'invalid_output' });
+    expect(JSON.stringify(error)).not.toContain('k7sEcrt');
+  });
+
+  it('a 7-character key as a token inside a sentence → rejected (also in plain text)', async () => {
+    expect((await run('k7sEcrt', answerWith({ analysis: 'Your token is k7sEcrt, keep it.' }))).error)
+      .toMatchObject({ kind: 'invalid_output' });
+    expect((await run('k7sEcrt', 'Use (k7sEcrt) here.', null)).error).toMatchObject({ kind: 'invalid_output' });
+  });
+
+  it('a 4-character key that appears only INSIDE longer words → accepted', async () => {
+    const text = answerWith({ analysis: 'The abcdefg and xabcd methods.', terms: [{ ...VALID_TEST_ANSWER.terms[0], heading: 'Zabcd9 studies' }] });
+    const { value, error } = await run('abcd', text);
+    expect(error).toBeUndefined();
+    expect(value.json.analysis).toBe('The abcdefg and xabcd methods.');
+  });
+
+  it('key "a" in ordinary prose → accepted', async () => {
+    const prose = 'This is a book about a city, a river and a war.';
+    const { value, error } = await run('a', answerWith({ analysis: prose }));
+    expect(error).toBeUndefined();
+    expect(value.json.analysis).toBe(prose);
+    expect((await run('a', prose, null)).value.text).toBe(prose);
+  });
+
+  it('key "a" as an ENTIRE heading (whitespace trimmed) → rejected', async () => {
+    expect((await run('a', headingOf(' a '))).error).toMatchObject({ kind: 'invalid_output' });
+  });
+
+  it('a 12-character key as a substring → rejected (unchanged)', async () => {
+    expect((await run('k12secretKEY', answerWith({ analysis: 'xxk12secretKEYyy' }))).error)
+      .toMatchObject({ kind: 'invalid_output' });
+  });
+
+  it('a 2–7 character key as a whole OBJECT KEY is rejected; inside a longer name it is not', () => {
+    const cfg = { apiKey: 'tok5x', providerId: 'lmstudio', provider: 'LM Studio (local)' };
+    expect(() => rejectEchoedKey(cfg, { 'tok5x': 1 })).toThrow(ProviderError);
+    expect(() => rejectEchoedKey(cfg, { 'my-tok5x': 1 })).toThrow(ProviderError);
+    expect(() => rejectEchoedKey(cfg, { mytok5xname: 1 })).not.toThrow();
   });
 });

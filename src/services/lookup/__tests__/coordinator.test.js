@@ -5,6 +5,9 @@ import { createScheduler, createRunCache, LookupError } from '../scheduler';
 import { outcomeOf } from '../locApi';
 import { EVIDENCE, mockLoc, fastSchedulerOptions } from '../../../../test/locFixtures';
 import { openFixture } from '../../../../test/localDbFixtures';
+import { builtRun } from '../../../../test/pipelineFixtures';
+import { buildHistoryEntry, saveHistoryEntry, loadHistory } from '../../history';
+import { viaNote } from '../../../components/pipelineText';
 
 const IDENTITY = {
   core: { profile: 'core', release: '2026.09.27.1', releaseCommit: 'a'.repeat(40), file: '/lcsh-core.db' },
@@ -163,7 +166,9 @@ describe('[P5 row5] local-db full: every authority is answered locally', () => {
     const local = localOf('full');
     const raw = await backend(local).lookup({ id: 's1', heading: 'Felis', kind: 'topical' });
     expect(raw.requests).toEqual(['local:Q1:lcsh', 'local:Q2:lcsh', 'local:Q3a:lcsh', 'local:Q3b:lcsh']);
-    expect(cids(raw)).toEqual(['lcsh:sh85021262 keyword label']);
+    // "Felis" is only in a VARIANT label of Cats, so the hit came from Q3b
+    // (P6 fix 11: it was mislabeled `label` before).
+    expect(cids(raw)).toEqual(['lcsh:sh85021262 keyword variant']);
   });
 
   it('stage 4 runs on LCNAF when stage 3 succeeded with no accepted candidate and the kind is a name', async () => {
@@ -462,5 +467,42 @@ describe('[P5 row5] the fallback notice is visible, never silent', () => {
         .toBe(FALLBACK_NOTICES[state]);
     }
     expect(fallbackNotice({ lookupBackend: 'local-db', localDb: { profile: 'core' } }, { state: () => 'ready' })).toBeNull();
+  });
+});
+
+// Correctness review (Phase 6) finding 1: a keyword hit found ONLY through a
+// variant label (Q3b) is `via: 'variant'` (SPEC-P5 §5, §8, §9).
+describe('[P6 fix11] local FTS keeps where a row was found', () => {
+  const row = (id, uri, label) => ({ id, uri, authority: 'lcsh', label, deprecated: 0, marc_key: `150  $a${label}` });
+  const BOTH = row(1, 'sh85021262', 'Cats');
+  const VARIANT_ONLY = row(2, 'sh85007901', 'Felidae');
+  const LABEL_ONLY = row(3, 'sh85021263', 'Cats in art');
+  const rows = { Q1: [], Q2: [], Q3a: [BOTH, LABEL_ONLY], Q3b: [BOTH, VARIANT_ONLY] };
+  const lookup = () => backend(staticLocal('full', async (name) => (rows[name] || []).map((r) => ({ ...r }))))
+    .lookup({ id: 's1', heading: 'Felis catus', kind: 'topical' });
+
+  it('Q3a only → label; Q3b only → variant; found by both → label', async () => {
+    mockLoc({});
+    const raw = await lookup();
+    expect(raw.requests).toEqual(['local:Q1:lcsh', 'local:Q2:lcsh', 'local:Q3a:lcsh', 'local:Q3b:lcsh']);
+    const viaOf = Object.fromEntries(raw.candidates.map((c) => [c.localId, c.via]));
+    expect(viaOf).toEqual({ sh85021262: 'label', sh85021263: 'label', sh85007901: 'variant' });
+  });
+
+  it('the variant provenance survives the Matches note and a history save and reload', async () => {
+    mockLoc({});
+    const raw = await lookup();
+    const variant = raw.candidates.find((c) => c.localId === 'sh85007901');
+    expect(viaNote(variant)).toBe('matched a variant name');
+    expect(viaNote(raw.candidates.find((c) => c.localId === 'sh85021262'))).toBeFalsy();
+
+    const run = builtRun();
+    const results = { ...run.lookup.results, s1: { ...run.lookup.results.s1, candidates: raw.candidates } };
+    const entry = buildHistoryEntry({ run: { ...run, lookup: { ...run.lookup, results } }, id: 'e-via', timestamp: '2026-10-01T00:00:00.000Z' });
+    await saveHistoryEntry(entry);
+    const [stored] = await loadHistory();
+    const saved = stored.lookup.results.find((r) => r.suggestionId === 's1').candidates;
+    expect(Object.fromEntries(saved.map((c) => [c.localId, c.via])))
+      .toEqual({ sh85021262: 'label', sh85021263: 'label', sh85007901: 'variant' });
   });
 });

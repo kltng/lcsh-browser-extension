@@ -4,7 +4,13 @@ import {
   PointerError, POINTER_URL, SUPPORTED_FINGERPRINTS, UNSUPPORTED_MESSAGE, UPDATE_CHECK_INTERVAL_MS
 } from '../pointer';
 
+import { getSettings, localDbUpdateCheck } from '../../settings';
+
 const COMMIT = '0123456789abcdef0123456789abcdef01234567';
+const INSTALLED = {
+  profile: 'core', release: '2026.09.26.1', releaseCommit: 'a'.repeat(40), file: '/db-1.db',
+  dbSize: 4096, sha256Db: 'b'.repeat(64), compatFingerprint: 'FP', installedAt: '2026-09-26T00:00:00.000Z'
+};
 const RELEASE = '2026.09.27.1';
 const FINGERPRINT = SUPPORTED_FINGERPRINTS[0];
 
@@ -232,9 +238,50 @@ describe('[P5 fix13] the document-owned update checker', () => {
     expect(fetchImpl).not.toHaveBeenCalled();
 
     const stale = checkerOf({ stored: { lastCheckedAt: 1000, latestSeen: RELEASE }, fetchImpl });
-    await stale.checker.checkOnOpen(null);
+    // P6 fix 11: the automatic check needs an installed database.
+    await stale.checker.checkOnOpen(INSTALLED);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(stale.written[0]).toEqual({ lastCheckedAt: 1790000000000, latestSeen: RELEASE });
+  });
+
+  // Security review (Phase 6) finding 3: with NO database installed, nothing
+  // contacts Hugging Face until the user starts an install or asks to check.
+  describe('[P6 fix11] no automatic check without an installed database', () => {
+    it('fresh settings, page open: no pointer fetch and no throttle write', async () => {
+      globalThis.fetch = vi.fn(async () => { throw new Error('no network in tests'); });
+      // The app's own wiring: the default fetcher and the stored throttle.
+      const checker = createUpdateChecker({
+        readCheck: () => localDbUpdateCheck(),
+        writeCheck: (value) => localDbUpdateCheck(value)
+      });
+      const settings = await getSettings();
+      expect(settings.localDb).toBeNull();
+      await checker.checkOnOpen(settings.localDb);
+      expect(globalThis.fetch).not.toHaveBeenCalled();
+      expect(await localDbUpdateCheck()).toBeNull();
+      expect(checker.pointer()).toBeNull();
+    });
+
+    it('an installed database: the 24 h check still runs', async () => {
+      const fetchImpl = vi.fn(async () => validatePointer(pointer()));
+      const { checker, written } = checkerOf({ stored: null, fetchImpl });
+      await checker.checkOnOpen(INSTALLED);
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect(written).toHaveLength(1);
+      // And it stays throttled for 24 h.
+      await checker.checkOnOpen(INSTALLED);
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    });
+
+    it('the install confirmation and "Check for a new release" still fetch with nothing installed', async () => {
+      const fetchImpl = vi.fn(async () => validatePointer(pointer()));
+      const { checker } = checkerOf({ stored: null, fetchImpl });
+      await checker.checkOnOpen(null);
+      expect(fetchImpl).not.toHaveBeenCalled();
+      // Both user actions call refresh() (LocalDbPanel `ask`, `onCheckUpdate`).
+      expect((await checker.refresh(null)).release).toBe(RELEASE);
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('a manual refresh is ALWAYS allowed, even right after an automatic check', async () => {

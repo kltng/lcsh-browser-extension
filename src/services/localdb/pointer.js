@@ -267,11 +267,16 @@ export const createUpdateChecker = ({
     update: () => update,
     refresh,
     /**
-     * The automatic check when the owner page opens: at most once per 24 h.
+     * The automatic check when the owner page opens: at most once per 24 h,
+     * and only when a database is installed.
      * @param {object|null} installed - The installed record
      * @returns {Promise<void>}
      */
     async checkOnOpen(installed = null) {
+      // P6 security review finding 3: with no database installed, nothing
+      // contacts Hugging Face on its own. The pointer is fetched only by a user
+      // action (the §4.3 confirmation or "Check for a new release": refresh()).
+      if (!installed) return;
       let last = null;
       try {
         last = await readCheck();

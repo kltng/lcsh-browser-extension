@@ -58,6 +58,50 @@ export const baseURLFor = (entry, providerSettings = {}) => {
 };
 
 /**
+ * The ORIGIN of a provider value's endpoint (`https://host[:port]`), or null
+ * when there is none or it is invalid.
+ * @param {object} entry - Registry entry
+ * @param {object} [providerSettings] - Stored value or draft
+ * @returns {string|null}
+ */
+export const endpointOrigin = (entry, providerSettings = {}) => {
+  const base = baseURLFor(entry, providerSettings);
+  return base.ok && base.url ? new URL(base.url).origin : null;
+};
+
+/**
+ * The origin a value's API key belongs to (P6 security review finding 1), or
+ * null when it belongs to none. A key saved with `keyOrigin` belongs to that
+ * origin. A key saved before keys were bound (no `keyOrigin`) belongs to the
+ * origin it was saved with: nothing better is known, and every edit of the
+ * endpoint goes through editDraft(), which clears it on an origin change.
+ * @param {object} entry - Registry entry
+ * @param {object} [providerSettings] - Stored value or draft
+ * @returns {string|null}
+ */
+export const keyOriginOf = (entry, providerSettings = {}) => {
+  const recorded = providerSettings?.keyOrigin;
+  if (typeof recorded === 'string' && recorded) return recorded;
+  return endpointOrigin(entry, providerSettings);
+};
+
+/**
+ * Whether a value's API key may be sent to its endpoint: there is no key, or
+ * the key belongs to exactly the endpoint's origin.
+ * @param {object} entry - Registry entry
+ * @param {object} [providerSettings] - Stored value or draft
+ * @returns {boolean}
+ */
+export const isKeyBound = (entry, providerSettings = {}) => {
+  // Nano runs on the device: it has no endpoint and never sends a key.
+  if (entry.adapter === 'chrome-nano') return true;
+  const key = typeof providerSettings?.apiKey === 'string' ? providerSettings.apiKey.trim() : '';
+  if (!key) return true;
+  const origin = endpointOrigin(entry, providerSettings);
+  return origin !== null && keyOriginOf(entry, providerSettings) === origin;
+};
+
+/**
  * Find one model's cached metadata.
  * @param {object|null} metaEntry - `{fetchedAt, models:[...]}` or null
  * @param {string|null} model - Model id

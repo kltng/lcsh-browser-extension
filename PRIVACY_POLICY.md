@@ -53,22 +53,28 @@ data-retention rules. Please read the policy of the provider you use.
 ### 2. The Library of Congress
 
 To check that a suggested heading really exists, the extension searches
-`id.loc.gov`. Only the heading text is sent — for example
-`Motion pictures--Japan--History`. Your abstract, notes and images are never
-sent to the Library of Congress.
+`id.loc.gov`. Only search terms are sent — the headings the AI suggested or
+you typed, for example `Motion pictures--Japan--History`. Your abstract,
+notes and images are not sent as such. But the AI writes its headings from
+your text, so a heading can repeat words from it. If your text is
+confidential, read the suggested headings before you look them up.
 
 If you install the offline database (below) and choose the profile that does
 not include names, name headings are still looked up at `id.loc.gov`. With
 the full offline database, a chosen name's MARC field is fetched from
 `id.loc.gov` as well.
 
-### 3. Hugging Face (only if you install the offline database)
+### 3. Hugging Face (only if you use the offline database)
 
-The offline database is optional. If you install it, the extension downloads
-files from `huggingface.co` and its content delivery network. The download
-does **not** include anything you typed: it is a plain file download.
-Hugging Face and its network receive the ordinary technical details of any
-download, such as your IP address.
+The offline database is optional. The extension contacts `huggingface.co`
+and its content delivery network only when you install, repair or update the
+database, when you click "Check for a new release", and — once you have a
+database installed — once a day to see if a newer release exists. Without an
+installed database it never contacts Hugging Face on its own.
+
+These requests do **not** include anything you typed: they are plain file
+downloads. Hugging Face and its network receive the ordinary technical
+details of any download, such as your IP address.
 
 ## What is stored, and where
 
@@ -94,9 +100,14 @@ extension has no server component.
 - **Storage** and **unlimited storage** — to keep the settings, history and
   the optional database on your computer.
 - **Access to `id.loc.gov`** — to look up headings.
-- **Access to a provider's address** — requested only when you choose that
-  provider, and only for that one. If you decline, the extension keeps
-  working with the providers you already allowed.
+- **Access to Google's Gemini address** — granted when you install the
+  extension, because earlier versions used Gemini only and existing users
+  must keep working after the update. It is used only if you choose Gemini.
+- **Access to any other provider's address** — requested only when you
+  choose that provider, and only for that one. If you decline, the extension
+  keeps working with the providers you already allowed.
+- No permission is needed for Hugging Face: its files are public and allow
+  downloads from extensions.
 
 ## Your choices
 

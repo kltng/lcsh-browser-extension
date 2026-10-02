@@ -4,7 +4,7 @@
  */
 import { ProviderError } from './errors';
 import {
-  getProviderEntry, regionFor, modelMetaKey, baseURLFor, findModelMeta, resolveCapabilities, userJsonMode
+  getProviderEntry, regionFor, modelMetaKey, baseURLFor, findModelMeta, resolveCapabilities, userJsonMode, isKeyBound
 } from './capabilities';
 import { IMAGE_OPTS, nanoAvailability } from './geminiNano';
 
@@ -31,6 +31,13 @@ export const resolveConfigFromDraft = async (entry, draft = {}, { purpose = 'gen
     throw notConfigured(entry, base.missing ? 'the server address is missing' : `the server address is invalid (${base.reason})`);
   }
   const apiKey = typeof value.apiKey === 'string' && value.apiKey.trim() ? value.apiKey.trim() : null;
+  // P6 security review finding 1: a key is only ever sent to the origin it
+  // was entered for. This is the one place every Test, Load models and
+  // generation request gets its credential, so a key bound to another origin
+  // (or to none) is refused here, never sent.
+  if (apiKey && !isKeyBound(entry, value)) {
+    throw notConfigured(entry, 'the API key belongs to another server address; enter the key again');
+  }
   if (entry.keyRequired === 'yes' && !apiKey) throw notConfigured(entry, 'the API key is missing');
   const typedModel = typeof value.model === 'string' ? value.model.trim() : '';
   const model = entry.adapter === 'chrome-nano' ? entry.defaultModel : (typedModel || entry.defaultModel || null);

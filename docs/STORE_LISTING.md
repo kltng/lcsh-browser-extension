@@ -34,8 +34,10 @@ LCSH Recommendation Tool
 > Your key is stored on your computer and is sent only to the provider it
 > belongs to.
 >
-> **Or use no cloud at all.** Chrome's built-in Gemini Nano runs on your
-> device, so your text never leaves it.
+> **Or keep the AI on your computer.** Chrome's built-in Gemini Nano runs
+> on your device, so your text is not sent to an AI company. (The headings
+> are still checked at the Library of Congress, or in the offline database
+> if you install it.)
 >
 > **Work offline.** You can install a copy of the Library of Congress subject
 > and genre authorities (about 62 MB) and search it locally instead of over
@@ -67,8 +69,8 @@ Productivity
 | `storage` | Keeps the user's settings, API key and saved results on the user's own computer. |
 | `unlimitedStorage` | Only for the optional offline authority database, which can be several gigabytes. |
 | `https://id.loc.gov/*` | Looks up each suggested heading in the Library of Congress authority file. This is the verification the extension exists to do. |
+| `https://generativelanguage.googleapis.com/*` | Google Gemini. Required because earlier versions used Gemini only, so existing users keep working after the update. Used only when the user chooses Gemini. |
 | Optional host permissions (provider endpoints) | Requested one at a time, only when the user selects that provider, so the extension can send that provider's request. Declining leaves every other provider working. |
-| Optional `https://huggingface.co/*` | Only if the user installs the offline database, to download it. |
 
 ## Privacy practices form
 
@@ -76,8 +78,8 @@ Productivity
 - **Health, financial, authentication, personal communications, location,
   web history, user activity:** not collected.
 - **Website content:** the bibliographic text the user types is sent to the
-  AI provider the user chooses, and the heading text alone is sent to
-  id.loc.gov. Not sold, not used for advertising, not used for anything
+  AI provider the user chooses, and only the search terms (the headings,
+  which the AI writes from the user's text) are sent to id.loc.gov. Not sold, not used for advertising, not used for anything
   unrelated to the single purpose.
 - **Remote code:** none. All JavaScript and WebAssembly ships in the package.
 - Privacy policy URL: the `PRIVACY_POLICY.md` in the repository (or wherever

@@ -99,7 +99,8 @@ export const createCoordinator = ({ scheduler = getPageScheduler(), cache = crea
       let accepted = 0;
       const deprecated = [];
       for (const row of rows) {
-        const candidate = mapRow(row, { via });
+        // `via` is a fixed value, or a function of the row (local FTS).
+        const candidate = mapRow(row, { via: typeof via === 'function' ? via(row) : via });
         if (candidate) {
           pool.push({ candidate, authIndex: authIndexOf(candidate.authority), stage: part.stage, hitIndex: part.hits++ });
           accepted += 1;
@@ -156,7 +157,8 @@ export const createCoordinator = ({ scheduler = getPageScheduler(), cache = crea
         return failLocal(err);
       }
       for (const err of result.errors) failLocal(err);
-      const taken = take(result.rows, { via: 'label', part });
+      const variantOnly = result.variantOnlyIds || new Set();
+      const taken = take(result.rows, { via: (row) => (variantOnly.has(row.id) ? 'variant' : 'label'), part });
       return { ok: result.ran, accepted: taken.accepted };
     };
 
