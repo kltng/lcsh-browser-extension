@@ -8,6 +8,8 @@ import { FALLBACK_BANNER } from '../services/pipeline/select';
 import { fallbackNotice } from '../services/lookup/index';
 import { getSettings } from '../services/settings';
 import { outcomeLine, choiceText, authorityLabel, lcLink, sourceLine, viaNote, replacementNoteText } from './pipelineText';
+import { shownText, HIDDEN_TEXT } from '../services/keyGuard';
+import { useKnownKeys } from './useKnownKeys';
 
 /**
  * One candidate row: label, authority badge, LC link, match class, how the
@@ -44,17 +46,31 @@ const CandidateRow = ({ candidate, chosen, similarity, readOnly, onUse }) => {
  */
 export const MatchesPanel = ({
   suggestions, results, pending = {}, selections, mode, manual = {}, readOnly = false, onChoose, onRetry
-}) => (
+}) => {
+  // P6 fix 14: finished display strings are checked against the known keys,
+  // and the view re-renders when those keys change.
+  useKnownKeys();
+  return (
   <Box>
     {suggestions.map((s) => {
       const result = results[s.id];
       const selection = selections.find((x) => x.suggestionId === s.id);
       const candidates = result?.candidates || [];
+      // The finished line, and the heading alone (a 1-character key matches only a whole value).
+      const headingHidden = shownText(`${s.heading} (AI suggestion · ${s.kind})`) === HIDDEN_TEXT
+        || shownText(s.heading) === HIDDEN_TEXT;
+      const droppedNote = selection?.cid && selection.droppedSubdivisions.length > 0
+        ? shownText(`The selected heading does not include these suggested subdivisions: ${selection.droppedSubdivisions.join(', ')}`)
+        : null;
       return (
         <Card key={s.id} variant="outlined" sx={{ mb: 2 }}>
           <CardContent>
             <Typography variant="subtitle1">
-              {s.heading} <Typography component="span" variant="caption" color="text.secondary">(AI suggestion · {s.kind})</Typography>
+              {headingHidden ? HIDDEN_TEXT : (
+                <>
+                  {s.heading} <Typography component="span" variant="caption" color="text.secondary">(AI suggestion · {s.kind})</Typography>
+                </>
+              )}
             </Typography>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
               {pending[s.id] && <CircularProgress size={14} />}
@@ -93,17 +109,16 @@ export const MatchesPanel = ({
                 {!readOnly && <Button size="small" color="inherit" onClick={() => onChoose(s.id, null)}>Use none</Button>}
               </Box>
             )}
-            {selection?.cid && selection.droppedSubdivisions.length > 0 && (
-              <Alert severity="info" sx={{ mt: 1 }}>
-                The selected heading does not include these suggested subdivisions: {selection.droppedSubdivisions.join(', ')}
-              </Alert>
+            {droppedNote && (
+              <Alert severity="info" sx={{ mt: 1 }}>{droppedNote}</Alert>
             )}
           </CardContent>
         </Card>
       );
     })}
   </Box>
-);
+  );
+};
 
 /**
  * "Build recommendations": build them, then show the Recommendations step.

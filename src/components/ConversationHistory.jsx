@@ -11,7 +11,8 @@ import {
   runViewOf, adaptLegacyEntry, legacyMarcCopyText, LEGACY_HEADER, LEGACY_MARC_LABEL, LEGACY_TEXT_LABEL
 } from '../services/history';
 import { getSimilarityColor } from '../utils/similarityUtils';
-import { guardExit, documentKeys, KeyEchoError } from '../services/keyGuard';
+import { guardExit, documentKeys, KeyEchoError, shownText } from '../services/keyGuard';
+import { useKnownKeys } from './useKnownKeys';
 import { SuggestionsPanel } from './InitialSuggestions';
 import { MatchesPanel } from './ScrapedResults';
 import { RecommendationsPanel } from './FinalRecommendations';
@@ -68,6 +69,10 @@ export const V2EntryView = ({ entry }) => {
  * @returns {JSX.Element}
  */
 export const LegacyEntryView = ({ entry, onCopy }) => {
+  // P6 fix 14 (finding 3): history DISPLAY is an exit. Every model-written field
+  // of an old entry is shown as fixed text when it repeats a known key; the
+  // stored entry itself is never changed.
+  useKnownKeys();
   const legacy = adaptLegacyEntry(entry);
   return (
     <Box>
@@ -89,21 +94,21 @@ export const LegacyEntryView = ({ entry, onCopy }) => {
         <List dense>
           {legacy.items.map((item, index) => (
             <ListItem key={index} divider sx={{ display: 'block' }}>
-              <Typography variant="body2" fontWeight="medium">{item.heading}</Typography>
+              <Typography variant="body2" fontWeight="medium">{shownText(item.heading)}</Typography>
               <Typography variant="caption" color="text.secondary" component="div">
-                {LEGACY_TEXT_LABEL}: identifier {item.identifier || 'none'}; link {item.link || 'none'}
+                {LEGACY_TEXT_LABEL}: identifier {shownText(item.identifier) || 'none'}; link {shownText(item.link) || 'none'}
                 {item.similarity !== null ? `; spelling score ${item.similarity}%` : ''}
               </Typography>
               {item.justification && (
                 <Typography variant="caption" color="text.secondary" component="div">
-                  {LEGACY_TEXT_LABEL}: {item.justification}
+                  {LEGACY_TEXT_LABEL}: {shownText(item.justification)}
                 </Typography>
               )}
               {item.marc && (
                 <Box sx={{ mt: 0.5 }}>
                   <Typography variant="caption" color="warning.main" component="div">{LEGACY_MARC_LABEL}</Typography>
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                    <Typography variant="body2" sx={{ fontFamily: 'monospace', whiteSpace: 'pre-wrap' }}>{item.marc}</Typography>
+                    <Typography variant="body2" sx={{ fontFamily: 'monospace', whiteSpace: 'pre-wrap' }}>{shownText(item.marc)}</Typography>
                     <IconButton size="small" aria-label="Copy unverified MARC" onClick={() => onCopy(legacyMarcCopyText(item.marc))}>
                       <ContentCopyIcon fontSize="small" />
                     </IconButton>
@@ -116,7 +121,7 @@ export const LegacyEntryView = ({ entry, onCopy }) => {
       </Section>
       {legacy.specialConsiderations && (
         <Section title="Special considerations (older version)">
-          <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>{legacy.specialConsiderations}</Typography>
+          <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>{shownText(legacy.specialConsiderations)}</Typography>
         </Section>
       )}
     </Box>

@@ -26,7 +26,8 @@ LCSH Recommendation Tool
 >
 > If the model invents a heading, you see it listed as "no match returned by
 > this search". You never see an invented heading dressed up as a real one,
-> and you never see a MARC field that the model wrote.
+> and the extension never shows a MARC field that the model wrote (records
+> saved by version 1.x keep their old fields).
 >
 > **Use the AI you already pay for.** OpenAI, Google Gemini, Anthropic Claude,
 > DeepSeek, Qwen, Zhipu GLM, Moonshot Kimi, MiniMax, OpenRouter, a model
@@ -43,7 +44,8 @@ LCSH Recommendation Tool
 > and genre authorities (about 62 MB) and search it locally instead of over
 > the network. A larger edition adds 12 million name authorities.
 >
-> **Made for cataloguers.** Subdivisions are kept. Deprecated headings point
+> **Made for cataloguers.** Subdivisions are kept when the LC heading has
+> them; any that do not match are listed. Deprecated headings point
 > at their replacements. You can override any choice by hand. Copy a single
 > MARC field, copy them all, or export a CSV. Your recent work is saved on
 > your computer, with the provider and model that produced it.

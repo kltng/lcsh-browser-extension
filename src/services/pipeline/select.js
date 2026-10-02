@@ -11,6 +11,7 @@ import { budgetBibliographic, candidateLimit, isNano, NANO_RETRY_CANDIDATES } fr
 import { levenshteinDistance } from '../../utils/similarityUtils';
 import { makeSelection } from './types';
 import { buildMarc } from './marc';
+import { guardExit, documentKeys } from '../keyGuard';
 
 /** ProviderError kinds that lead to the AUTOMATIC exact-only fallback (§5.2). */
 export const AUTO_FALLBACK_KINDS = new Set(['invalid_output', 'truncated', 'too_long']);
@@ -143,7 +144,20 @@ export const exactOnlyChoices = (suggestions, results) => {
   return choices;
 };
 
+/**
+ * The model-written text of the selection request: the suggested headings and
+ * kinds placed in the prompt. Candidate labels and ids come from LC records,
+ * and the bibliographic fields are the user's own input.
+ * @param {{presented:object[]}} presentation - The presentation of THIS call
+ * @returns {object[]}
+ */
+export const modelTextOfSelectRequest = (presentation) => presentation.presented.map(({ heading, kind }) => ({ heading, kind }));
+
 const callSelect = async (generateImpl, cfg, info, presentation, signal) => {
+  // P6 fix 14 (finding 4): the selection request is a network exit. Nothing is
+  // sent when its model-written text repeats the selection provider's key or
+  // any other known key (every stored key, every key a run used).
+  guardExit('display', modelTextOfSelectRequest(presentation), [cfg?.apiKey, ...documentKeys()]);
   const result = await generateImpl(cfg, {
     ...buildSelectPrompt(info, presentation.presented),
     schema: SELECT_SCHEMA, temperature: 0.1, maxOutputTokens: 2048, signal

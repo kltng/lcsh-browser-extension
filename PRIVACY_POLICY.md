@@ -44,8 +44,9 @@ For the Chinese providers you choose the international or the China region
 yourself; the extension never switches regions on its own.
 
 What is sent: your bibliographic text, your uploaded images, and your
-cataloguing rules. What is never sent: your API keys for any *other*
-provider, your history, or anything about your browser.
+cataloguing rules, plus the headings a previous step suggested. The
+extension never adds your API keys for other providers, your history, or
+anything about your browser to a request.
 
 Each provider handles your data under its own privacy policy and its own
 data-retention rules. Please read the policy of the provider you use.
@@ -83,15 +84,17 @@ Everything is stored by Chrome on your computer:
 - **API keys** — in the extension's local storage. The extension sends a key
   only as a sign-in header to the server you entered it for, never in a web
   address. If you change the server (another host, port or http/https), the
-  key is cleared and you enter it again. The extension never writes a key
-  into your history, exported files or error messages.
-  One limit: an AI service could repeat your key inside its answer. The
-  extension checks every answer, and everything it would show, save, export
-  or search at the Library of Congress, and stops if it finds your key. This
-  check is reliable for keys of 8 or more characters. A very short key (such
-  as the one-letter key often used with a local LM Studio) cannot be told
-  apart from ordinary words, so use a long key for any AI service that is not
-  on your own computer.
+  key is cleared and you enter it again. The extension never puts a key into
+  a prompt, your history, exported files or error messages.
+  *Safety net, not a guarantee:* an AI service could repeat a key in its
+  answer. The extension looks for your stored keys in AI answers and in what
+  it is about to send, show, save or export, and stops or hides the text if
+  it finds one. This check can miss cases: keys of 2–7 characters are found
+  only as separate words, a 1-character key only when it is the whole text,
+  and it cannot recognise a key you have already deleted. Keys saved by
+  version 1.x of the extension are assumed to belong to the server they are
+  saved with. Use a long key for any AI service that is not on your own
+  computer.
 - **Your settings** — the provider and model you chose, your cataloguing
   rules, and which lookup source you use.
 - **History** — the records you save, including the headings, their Library

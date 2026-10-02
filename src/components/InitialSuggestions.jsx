@@ -5,13 +5,19 @@ import {
 import { useAppContext } from '../context/AppContext';
 import { TEXT_FALLBACK_NOTICE } from '../services/pipeline/suggest';
 import { SUGGESTION_NOTE } from './pipelineText';
+import { shownText } from '../services/keyGuard';
+import { useKnownKeys } from './useKnownKeys';
 
 /**
  * Step 2 content: the subject analysis and the AI suggestions (also used read-only by history).
  * @param {{suggest:{subjectAnalysis:string, suggestions:object[], suggestMode:string}}} props - Step 1 result
  * @returns {JSX.Element}
  */
-export const SuggestionsPanel = ({ suggest }) => (
+export const SuggestionsPanel = ({ suggest }) => {
+  // P6 fix 14: every model-written value is checked when shown (this panel is
+  // also the history view), and the view follows changes of the known keys.
+  useKnownKeys();
+  return (
   <Box>
     {suggest.suggestMode === 'text-fallback' && (
       <Alert severity="warning" sx={{ mb: 2 }}>{TEXT_FALLBACK_NOTICE}</Alert>
@@ -20,7 +26,7 @@ export const SuggestionsPanel = ({ suggest }) => (
       <Card variant="outlined" sx={{ mb: 2 }}>
         <CardContent>
           <Typography variant="subtitle1" gutterBottom>Subject analysis</Typography>
-          <Typography variant="body2" color="text.secondary">{suggest.subjectAnalysis}</Typography>
+          <Typography variant="body2" color="text.secondary">{shownText(suggest.subjectAnalysis)}</Typography>
         </CardContent>
       </Card>
     )}
@@ -31,17 +37,18 @@ export const SuggestionsPanel = ({ suggest }) => (
           <ListItemText
             primary={(
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <Typography variant="body1">{s.heading}</Typography>
-                <Chip size="small" variant="outlined" label={`AI suggestion · ${s.kind}`} />
+                <Typography variant="body1">{shownText(s.heading)}</Typography>
+                <Chip size="small" variant="outlined" label={shownText(`AI suggestion · ${s.kind}`)} />
               </Box>
             )}
-            secondary={s.reason || null}
+            secondary={shownText(s.reason) || null}
           />
         </ListItem>
       ))}
     </List>
   </Box>
-);
+  );
+};
 
 const InitialSuggestions = () => {
   const { run, workflow, setActiveStep } = useAppContext();

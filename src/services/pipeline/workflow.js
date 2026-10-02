@@ -241,9 +241,10 @@ export const createWorkflow = ({
     const owns = () => !controller.signal.aborted && state.run.runId === begun.token.runId
       && state.select.pending && state.select.revision === begun.token.revision;
     try {
-      const { cfg } = await loadConfig();
+      const { cfg, settings } = await loadConfig();
       if (!owns()) return;
       useKey(begun.token.runId, cfg);
+      if (settings) setStoredKeys(keysOfSettings(settings));
       update((s) => setSelectSnapshot(s, begun.token, provenanceOf(cfg)));
       const result = await runAiSelect({ cfg, bibliographicInfo: input, suggestions, results, signal: controller.signal, generateImpl });
       if (!owns()) return;

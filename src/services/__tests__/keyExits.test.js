@@ -153,6 +153,43 @@ describe('[P6 fix13] other exits and other keys', () => {
   });
 });
 
+// P6 fix 14, finding 4: the AI-selection request is a network exit too.
+describe('[P6 fix14] the selection request never carries a known key', () => {
+  it('provider C\'s stored key inside a heading → the select request is NOT sent; the step fails with local text', async () => {
+    const KEY_C = 'sk-provider-c-key-0042';
+    const settings = { lookupBackend: 'loc-api', providers: { custom: { apiKey: KEY_C }, lmstudio: { apiKey: 'run-key-A-12345' } } };
+    // The main heading "Cats" is still found, so there is something to select.
+    mockLoc({ 'lcsh leftanchored "Cats"': [EVIDENCE.cats], 'lcsh keyword "Cats"': [EVIDENCE.cats] });
+    const generateImpl = vi.fn()
+      .mockResolvedValueOnce(suggested(`Cats--${KEY_C}`))
+      .mockResolvedValueOnce(answer({ selections: [{ suggestionId: 's1', choice: 's1c1', confidence: 90 }], additional: [] }));
+    const wf = make({ apiKey: 'run-key-A-12345', settings, generateImpl });
+    await wf.suggest({ bibliographicInfo: { title: 'T' }, rules: '' });
+    expect(wf.getState().suggestError).toBeNull();
+    await wf.lookupAll();
+    expect(wf.getState().lookup.results.s1.candidates.length).toBeGreaterThan(0);
+    await wf.select();
+    // Only the suggest call: nothing was sent for selection.
+    expect(generateImpl).toHaveBeenCalledTimes(1);
+    expect(wf.getState().select.error).toEqual({ kind: 'key_echo', message: 'The AI answer repeats an API key, so it was not used.' });
+  });
+
+  it('an ordinary selection request is still sent', async () => {
+    mockLoc({ 'lcsh leftanchored "Cats"': [EVIDENCE.cats] });
+    const settings = { lookupBackend: 'loc-api', providers: { custom: { apiKey: 'sk-provider-c-key-0042' } } };
+    const generateImpl = vi.fn()
+      .mockResolvedValueOnce(suggested('Cats'))
+      .mockResolvedValueOnce(answer({ selections: [{ suggestionId: 's1', choice: 's1c1', confidence: 90 }], additional: [] }));
+    const wf = make({ apiKey: 'run-key-A-12345', settings, generateImpl });
+    await wf.suggest({ bibliographicInfo: { title: 'T' }, rules: '' });
+    await wf.lookupAll();
+    await wf.select();
+    expect(generateImpl).toHaveBeenCalledTimes(2);
+    expect(wf.getState().select.error).toBeFalsy();
+    expect(wf.getState().run.stage).toBe('selected');
+  });
+});
+
 describe('[P6 fix13] ordinary runs are unaffected', () => {
   it('key "a": suggest, lookup, select, build, export and history all work', async () => {
     await fakes.storage.local.set({ [providerKey('lmstudio')]: { apiKey: 'a', baseURL: 'http://localhost:1234/v1' } });

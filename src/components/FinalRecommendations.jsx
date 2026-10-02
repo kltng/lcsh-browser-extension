@@ -10,7 +10,8 @@ import { subdivisionNote } from '../services/pipeline/select';
 import { copyAllText, recommendationsCsv, marcUnavailableText } from '../services/pipeline/exports';
 import { NONE_REASON_WORDS } from '../services/pipeline/types';
 import { needsNameKey } from '../services/pipeline/nameKeys';
-import { KeyEchoError } from '../services/keyGuard';
+import { KeyEchoError, shownText, HIDDEN_TEXT } from '../services/keyGuard';
+import { useKnownKeys } from './useKnownKeys';
 import { methodText, authorityLabel, lcLink, viaNote } from './pipelineText';
 
 /**
@@ -29,15 +30,24 @@ export const hasUnresolvedNameKeys = (recommendations = []) =>
  * @returns {JSX.Element}
  */
 export const RecommendationsPanel = ({ recommendations, selections, suggestions, onCopy }) => {
+  // P6 fix 14: finished display strings are checked against the known keys,
+  // and the view re-renders when those keys change.
+  useKnownKeys();
   const withoutHeading = selections.filter((s) => !s.cid);
   const headingOf = (id) => suggestions.find((s) => s.id === id)?.heading || id;
+  const withoutHeadingLine = (id) => {
+    const heading = headingOf(id);
+    const line = shownText(`${heading} (AI suggestion)`);
+    return shownText(heading) === HIDDEN_TEXT ? HIDDEN_TEXT : line;
+  };
   return (
     <Box>
       {recommendations.length === 0 && (
         <Typography color="text.secondary" sx={{ mb: 2 }}>No LC heading was chosen.</Typography>
       )}
       {recommendations.map((rec) => {
-        const note = subdivisionNote(rec, selections);
+        // The select.js join, checked as the FINISHED note (finding 2).
+        const note = shownText(subdivisionNote(rec, selections));
         return (
           <Card key={rec.cid} variant="outlined" sx={{ mb: 2 }}>
             <CardContent>
@@ -81,7 +91,7 @@ export const RecommendationsPanel = ({ recommendations, selections, suggestions,
             {withoutHeading.map((s) => (
               <ListItem key={s.suggestionId} divider>
                 <ListItemText
-                  primary={`${headingOf(s.suggestionId)} (AI suggestion)`}
+                  primary={withoutHeadingLine(s.suggestionId)}
                   secondary={NONE_REASON_WORDS[s.noneReason] || 'no candidate was chosen'}
                 />
               </ListItem>

@@ -115,13 +115,36 @@ export const guardExit = (exit, value, keys) => {
 // the keys stored for every provider (kept current by watchStoredKeys()).
 const runKeys = new Set();
 let storedKeys = [];
+// Views that hide text re-render when the known keys change (P6 fix 14).
+let keysVersionNumber = 0;
+const keyListeners = new Set();
+const keysChanged = () => {
+  keysVersionNumber += 1;
+  keyListeners.forEach((listener) => listener());
+};
+
+/**
+ * Subscribe to changes of the known keys (for useSyncExternalStore).
+ * @param {()=>void} listener - Called after a change
+ * @returns {()=>void} - Unsubscribe
+ */
+export const subscribeKeys = (listener) => {
+  keyListeners.add(listener);
+  return () => keyListeners.delete(listener);
+};
+
+/** A number that changes whenever the known keys change. */
+export const keysVersion = () => keysVersionNumber;
 
 /**
  * Remember the key of a run's provider (the run snapshot).
  * @param {string|null|undefined} key - The run's API key
  */
 export const rememberRunKey = (key) => {
-  if (typeof key === 'string' && key.length > 0) runKeys.add(key);
+  if (typeof key === 'string' && key.length > 0 && !runKeys.has(key)) {
+    runKeys.add(key);
+    keysChanged();
+  }
 };
 
 /**
@@ -138,7 +161,10 @@ export const keysOfSettings = (settings) => Object.values(settings?.providers ||
  * @param {string[]} keys - Every key stored now
  */
 export const setStoredKeys = (keys) => {
-  storedKeys = usableKeys(keys);
+  const next = usableKeys(keys);
+  if (next.length === storedKeys.length && next.every((k, i) => k === storedKeys[i])) return;
+  storedKeys = next;
+  keysChanged();
 };
 
 /**
@@ -166,8 +192,27 @@ export const watchStoredKeys = ({ readStoredApiKeys, onSettingsChanged }) => {
   };
 };
 
+/** The fixed text shown instead of a display value that repeats a known key. */
+export const HIDDEN_TEXT = 'Hidden: this text repeats an API key.';
+
+/**
+ * Exit (d) for FINISHED display values (P6 fix 14): model text after it was
+ * joined or formatted for display, and every model-derived field of a history
+ * entry. Returns the value unchanged, or HIDDEN_TEXT when it repeats a known
+ * key (every key a run used and every stored key). The same fields and length
+ * rules as for export text apply.
+ * @param {any} text - The finished display string
+ * @param {string[]} [keys] - Keys to check (default: every known key)
+ * @returns {any}
+ */
+export const shownText = (text, keys = documentKeys()) => {
+  if (typeof text !== 'string' || text === '') return text;
+  return valueHasKey(textFields(text), keys) ? HIDDEN_TEXT : text;
+};
+
 /** Forget every key (tests). */
 export const resetKeyRegistry = () => {
   runKeys.clear();
   storedKeys = [];
+  keysChanged();
 };
