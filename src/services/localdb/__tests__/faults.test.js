@@ -608,7 +608,9 @@ describe('[P5 §21] import-write (64 MiB)', () => {
   };
 
   it('throw: QuotaExceededError inside the importer after >= 64 MiB; importer cleanup runs; storage error; §4.8', async () => {
-    const env = await world({ search: '?faults=import-write:throw' });
+    // The same hang window as the crash variant: a 64 MiB import on a loaded
+    // test machine can otherwise miss a 600 ms status window and be replaced.
+    const env = await world({ search: '?faults=import-write:throw', hangMs: 1500 });
     await expect(env.install(bigBytes())).rejects.toBeTruthy();
     const [claim] = env.claims;
     expect(claim.importedBytes).toBeGreaterThanOrEqual(IMPORT_FAULT_AFTER_BYTES);

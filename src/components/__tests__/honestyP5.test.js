@@ -84,8 +84,9 @@ describe('[P5 row12] the Matches step with local and mixed candidates', () => {
     });
     const text = expectHonest(html);
     expect(text).toContain('matched a variant name');
-    // The variant row keeps the class its own preferred label earns.
-    expect(text).toContain('keyword');
+    // The variant row keeps the class its own preferred label earns (shown in
+    // plain words since UI round 1: `keyword` → "Keyword match").
+    expect(text).toContain('Keyword match');
     expect(viaNote({ via: 'variant' })).toBe('matched a variant name');
     expect(viaNote({ via: 'label' })).toBeNull();
   });
@@ -344,11 +345,23 @@ describe('[P5 row12] the Lookup source settings section', () => {
     const text = textOf(html);
     expect(text).toContain('Core — subjects and genres');
     expect(text).toContain('Full — also 12 million names');
-    expect(text).toContain('Check for a new release');
     expect(text).toContain('Download');
-    // No pointer means no numbers are claimed.
-    expect(text).toContain('(download —, disk —)');
+    // No pointer means no numbers are claimed — and no "—" placeholders either (UI round 1).
+    expect(text).not.toContain('(download');
+    expect(text).not.toContain('disk —');
     expect(html).not.toMatch(/disabled=""[^>]*>Download/);
+    // UI round 1: "Check for a new release" belongs to the installed line.
+    expect(text).not.toContain('Check for a new release');
+
+    // With an installation and still no cached pointer, the check is there.
+    const installedText = textOf(renderHtml(LocalDbSettings, {
+      lookupBackend: 'local-db', installed: { profile: 'core', release: '2026.09.27.1', dbSize: 205_000_000, installedAt: '2026-09-27T00:00:00.000Z' },
+      state: null, pointer: null, operation: null,
+      onBackendChange: vi.fn(), onInstall: vi.fn(), onRepair: vi.fn(), onUninstall: vi.fn(),
+      onCancel: vi.fn(), onRetryOwnership: vi.fn(), onCheckUpdate: vi.fn()
+    }));
+    expect(installedText).toContain('Check for a new release');
+    expect(installedText).toContain('Switch to full');
   });
 
   /**

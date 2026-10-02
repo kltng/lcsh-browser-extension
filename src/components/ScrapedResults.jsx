@@ -7,7 +7,10 @@ import { selectionsOf } from '../services/pipeline/run';
 import { FALLBACK_BANNER } from '../services/pipeline/select';
 import { fallbackNotice } from '../services/lookup/index';
 import { getSettings } from '../services/settings';
-import { outcomeLine, choiceText, authorityLabel, lcLink, sourceLine, viaNote, replacementNoteText } from './pipelineText';
+import {
+  outcomeLine, choiceText, authorityLabel, lcLink, sourceLine, viaNote, replacementNoteText,
+  matchClassLabel, similarityText, matchesSummary
+} from './pipelineText';
 import { shownText } from '../services/keyGuard';
 import { useKnownKeys, KeysUnavailableNotice } from './useKnownKeys';
 
@@ -26,10 +29,10 @@ const CandidateRow = ({ candidate, chosen, similarity, readOnly, onUse }) => {
       <Link href={lcLink(candidate.uri)} target="_blank" rel="noopener noreferrer" variant="caption">
         LC record {candidate.localId}
       </Link>
-      <Chip size="small" variant="outlined" label={candidate.matchClass} />
+      <Chip size="small" variant="outlined" label={matchClassLabel(candidate.matchClass)} />
       {note && <Typography variant="caption" color="text.secondary">{note}</Typography>}
-      {chosen && similarity !== null && (
-        <Typography variant="caption" color="text.secondary">{similarity}% similar spelling</Typography>
+      {chosen && similarityText(similarity) && (
+        <Typography variant="caption" color="text.secondary">{similarityText(similarity)}</Typography>
       )}
       {!readOnly && !chosen && (
         <Button size="small" onClick={() => onUse(candidate.cid)}>Use this heading</Button>
@@ -39,87 +42,190 @@ const CandidateRow = ({ candidate, chosen, similarity, readOnly, onUse }) => {
 };
 
 /**
+ * Whether a card can start collapsed: its ONLY candidate is an exact match,
+ * that candidate is the current choice, and nothing else needs attention.
+ * @param {object|undefined} result - LookupResult
+ * @param {object|undefined} selection - The suggestion's selection
+ * @returns {boolean}
+ */
+export const startsCollapsed = (result, selection) => {
+  const candidates = result?.candidates || [];
+  return result?.outcome === 'found'
+    && candidates.length === 1
+    && candidates[0].matchClass === 'exact-full'
+    && selection?.cid === candidates[0].cid
+    && (result.replacementNotes || []).length === 0;
+};
+
+/**
+ * Whether a card is shown expanded (UI round 1b). A choice the user made by
+ * hand (true = expanded, false = collapsed) wins for that card in this run;
+ * without one, the card is collapsed exactly while the collapse rule holds,
+ * so it collapses as soon as the AI's choice makes the rule true.
+ * @param {boolean|null} userExpanded - The user's own choice, or null
+ * @param {boolean} collapsible - Whether the rule (startsCollapsed) holds now
+ * @returns {boolean}
+ */
+export const cardExpanded = (userExpanded, collapsible) => {
+  if (!collapsible) return true;
+  return userExpanded ?? false;
+};
+
+/**
+ * One suggestion card (UI round 1). An exact-only card starts collapsed to one
+ * line with an expand control; every other card starts expanded.
+ * @param {object} props - The suggestion, its result and selection, and the panel's callbacks
+ * @returns {JSX.Element}
+ */
+const SuggestionCard = ({
+  s, result, selection, pending, mode, manual, readOnly, onChoose, onRetry, showSource
+}) => {
+  // UI round 1b: the card follows the rule (it collapses as soon as the AI's
+  // choice makes it true), unless the user expanded or collapsed it by hand.
+  const [userExpanded, setUserExpanded] = useState(null);
+  const collapsible = startsCollapsed(result, selection);
+  const expanded = cardExpanded(userExpanded, collapsible);
+  const candidates = result?.candidates || [];
+  // The finished line, and the heading alone (a 1-character key matches only
+  // a whole value). A replacement (hidden, or "Loading…" before the keys
+  // have loaded) is shown instead of the whole line.
+  const line = `${s.heading} (AI suggestion · ${s.kind})`;
+  const lineShown = shownText(line);
+  const headingShown = shownText(s.heading);
+  const headingReplacement = lineShown !== line ? lineShown : (headingShown !== s.heading ? headingShown : null);
+  const droppedNote = selection?.cid && selection.droppedSubdivisions.length > 0
+    ? shownText(`The selected heading does not include these suggested subdivisions: ${selection.droppedSubdivisions.join(', ')}`)
+    : null;
+  const headingLine = headingReplacement !== null ? headingReplacement : (
+    <>
+      {s.heading} <Typography component="span" variant="caption" color="text.secondary">(AI suggestion · {s.kind})</Typography>
+    </>
+  );
+
+  if (!expanded) {
+    const chosen = candidates[0];
+    return (
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <CardContent sx={{ py: 1, '&:last-child': { pb: 1 } }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+            <Typography variant="subtitle1">{headingReplacement !== null ? headingReplacement : s.heading}</Typography>
+            <Typography variant="body2" color="text.secondary">→ {chosen.label}</Typography>
+            <Chip size="small" variant="outlined" label={matchClassLabel(chosen.matchClass)} />
+            <Box sx={{ flex: 1 }} />
+            <Button size="small" onClick={() => setUserExpanded(true)} aria-expanded="false">Show details</Button>
+          </Box>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <Card variant="outlined" sx={{ mb: 2 }}>
+      <CardContent>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Typography variant="subtitle1">{headingLine}</Typography>
+          <Box sx={{ flex: 1 }} />
+          {collapsible && (
+            <Button size="small" onClick={() => setUserExpanded(false)} aria-expanded="true">Hide details</Button>
+          )}
+        </Box>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+          {pending && <CircularProgress size={14} />}
+          <Typography variant="body2" color={result?.outcome === 'failed' ? 'error' : 'text.secondary'}>
+            {outcomeLine(result, Boolean(pending))}
+          </Typography>
+          {!readOnly && result?.outcome === 'failed' && (
+            <Button size="small" variant="outlined" onClick={() => onRetry(s.id)}>Retry lookup</Button>
+          )}
+        </Box>
+        {result && showSource && (
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
+            Source: {sourceLine(result.provenance)}
+          </Typography>
+        )}
+        {(result?.replacementNotes || []).map((note) => (
+          <Alert key={`${note.fromLocalId}-${note.targetLocalId}`} severity="info" sx={{ mb: 1 }}>
+            {replacementNoteText(note)}
+          </Alert>
+        ))}
+        {candidates.map((c) => (
+          <CandidateRow
+            key={c.cid}
+            candidate={c}
+            chosen={selection?.cid === c.cid}
+            similarity={selection?.cid === c.cid ? selection.lexicalSimilarity : null}
+            readOnly={readOnly}
+            onUse={(cid) => onChoose(s.id, cid)}
+          />
+        ))}
+        {candidates.length > 0 && (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1 }}>
+            <Typography variant="body2">
+              <strong>Current choice:</strong> {choiceText(selection, { mode, hasManual: Object.hasOwn(manual, s.id) })}
+            </Typography>
+            {!readOnly && <Button size="small" color="inherit" onClick={() => onChoose(s.id, null)}>Use none</Button>}
+          </Box>
+        )}
+        {droppedNote && (
+          <Alert severity="info" sx={{ mt: 1 }}>{droppedNote}</Alert>
+        )}
+      </CardContent>
+    </Card>
+  );
+};
+
+/**
+ * The one source of every result, or null when the results' sources differ.
+ * @param {Object<string,object>} results - LookupResult by suggestionId
+ * @returns {string|null}
+ */
+export const commonSourceLine = (results) => {
+  const lines = new Set(Object.values(results).filter(Boolean).map((r) => sourceLine(r.provenance)));
+  return lines.size === 1 ? [...lines][0] : null;
+};
+
+/**
  * Step 3 content, per suggestion (also used read-only by history).
  * @param {{suggestions:object[], results:Object<string,object>, pending?:Object<string,boolean>, selections:object[],
- *   mode:string|null, manual?:object, readOnly?:boolean, onChoose?:Function, onRetry?:Function}} props - State and callbacks
+ *   mode:string|null, manual?:object, readOnly?:boolean, onChoose?:Function, onRetry?:Function,
+ *   runId?:string|null}} props - State and callbacks (runId: the run the cards belong to)
  * @returns {JSX.Element}
  */
 export const MatchesPanel = ({
-  suggestions, results, pending = {}, selections, mode, manual = {}, readOnly = false, onChoose, onRetry
+  suggestions, results, pending = {}, selections, mode, manual = {}, readOnly = false, onChoose, onRetry, runId = null
 }) => {
   // P6 fix 14: finished display strings are checked against the known keys,
   // and the view re-renders when those keys change.
   useKnownKeys();
+  // UI round 1: one summary line, and "Source" once when every result agrees.
+  const shown = Object.fromEntries(suggestions.filter((s) => results[s.id]).map((s) => [s.id, results[s.id]]));
+  const commonSource = commonSourceLine(shown);
   return (
   <Box>
-    {suggestions.map((s) => {
-      const result = results[s.id];
-      const selection = selections.find((x) => x.suggestionId === s.id);
-      const candidates = result?.candidates || [];
-      // The finished line, and the heading alone (a 1-character key matches only
-      // a whole value). A replacement (hidden, or "Loading…" before the keys
-      // have loaded) is shown instead of the whole line.
-      const line = `${s.heading} (AI suggestion · ${s.kind})`;
-      const lineShown = shownText(line);
-      const headingShown = shownText(s.heading);
-      const headingReplacement = lineShown !== line ? lineShown : (headingShown !== s.heading ? headingShown : null);
-      const droppedNote = selection?.cid && selection.droppedSubdivisions.length > 0
-        ? shownText(`The selected heading does not include these suggested subdivisions: ${selection.droppedSubdivisions.join(', ')}`)
-        : null;
-      return (
-        <Card key={s.id} variant="outlined" sx={{ mb: 2 }}>
-          <CardContent>
-            <Typography variant="subtitle1">
-              {headingReplacement !== null ? headingReplacement : (
-                <>
-                  {s.heading} <Typography component="span" variant="caption" color="text.secondary">(AI suggestion · {s.kind})</Typography>
-                </>
-              )}
-            </Typography>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-              {pending[s.id] && <CircularProgress size={14} />}
-              <Typography variant="body2" color={result?.outcome === 'failed' ? 'error' : 'text.secondary'}>
-                {outcomeLine(result, Boolean(pending[s.id]))}
-              </Typography>
-              {!readOnly && result?.outcome === 'failed' && (
-                <Button size="small" variant="outlined" onClick={() => onRetry(s.id)}>Retry lookup</Button>
-              )}
-            </Box>
-            {result && (
-              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
-                Source: {sourceLine(result.provenance)}
-              </Typography>
-            )}
-            {(result?.replacementNotes || []).map((note) => (
-              <Alert key={`${note.fromLocalId}-${note.targetLocalId}`} severity="info" sx={{ mb: 1 }}>
-                {replacementNoteText(note)}
-              </Alert>
-            ))}
-            {candidates.map((c) => (
-              <CandidateRow
-                key={c.cid}
-                candidate={c}
-                chosen={selection?.cid === c.cid}
-                similarity={selection?.cid === c.cid ? selection.lexicalSimilarity : null}
-                readOnly={readOnly}
-                onUse={(cid) => onChoose(s.id, cid)}
-              />
-            ))}
-            {candidates.length > 0 && (
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1 }}>
-                <Typography variant="body2">
-                  <strong>Current choice:</strong> {choiceText(selection, { mode, hasManual: Object.hasOwn(manual, s.id) })}
-                </Typography>
-                {!readOnly && <Button size="small" color="inherit" onClick={() => onChoose(s.id, null)}>Use none</Button>}
-              </Box>
-            )}
-            {droppedNote && (
-              <Alert severity="info" sx={{ mt: 1 }}>{droppedNote}</Alert>
-            )}
-          </CardContent>
-        </Card>
-      );
-    })}
+    {suggestions.length > 0 && (
+      <Box sx={{ mb: 2 }}>
+        <Typography variant="body2">{matchesSummary(suggestions, results, pending)}</Typography>
+        {commonSource && (
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Source: {commonSource}</Typography>
+        )}
+      </Box>
+    )}
+    {suggestions.map((s) => (
+      <SuggestionCard
+        // Keyed by run: a choice made by hand lasts for that card in THIS run only.
+        key={`${runId ?? ''}:${s.id}`}
+        s={s}
+        result={results[s.id]}
+        selection={selections.find((x) => x.suggestionId === s.id)}
+        pending={Boolean(pending[s.id])}
+        mode={mode}
+        manual={manual}
+        readOnly={readOnly}
+        onChoose={onChoose}
+        onRetry={onRetry}
+        showSource={commonSource === null}
+      />
+    ))}
   </Box>
   );
 };
@@ -184,6 +290,7 @@ const ScrapedResults = () => {
         manual={run.select.manual}
         onChoose={workflow.choose}
         onRetry={workflow.retryLookup}
+        runId={run.run.runId}
       />
       <Box sx={{ mt: 3, display: 'flex', justifyContent: 'space-between', gap: 2 }}>
         <Button variant="outlined" onClick={() => setActiveStep(1)}>Back</Button>

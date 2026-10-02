@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Box, Typography, Button, Alert, Radio, RadioGroup, FormControlLabel, FormControl, FormLabel, LinearProgress,
+  Box, Typography, Button, Alert, Radio, RadioGroup, FormControlLabel, FormControl, FormLabel, FormHelperText, LinearProgress,
   Accordion, AccordionSummary, AccordionDetails, Link, Stack, Dialog, DialogTitle, DialogContent, DialogActions,
   List, ListItem, ListItemText
 } from '@mui/material';
@@ -20,6 +20,7 @@ export const KEEP_TAB_OPEN = 'Keep this tab open until it finishes.';
 export const FULL_WARNING = 'Large download (about 1.9 GB) and about 5.4 GB of disk space.';
 export const COMMITTING_TEXT = 'Finishing install…';
 export const UNINSTALLING_TEXT = 'Uninstalling…';
+export const INSTALL_FIRST_TEXT = 'Install a database below first.';
 
 /** The §3.4 / §3.1 states in words, with what the user can do about them. */
 export const STATE_TEXT = {
@@ -49,21 +50,34 @@ export const confirmationLines = ({ profile, entry, release, installed }) => [
 ];
 
 /**
- * A profile's install offer, from the pointer.
- * @param {{profile:string, entry:object|undefined, title:string, note?:string, disabled:boolean, onInstall:Function}} props - Offer
+ * A profile's install offer, from the pointer. The INSTALLED profile shows
+ * "Installed ✓" and no button; with another profile installed the button
+ * reads "Switch to <profile>".
+ * @param {{profile:string, entry:object|undefined, title:string, note?:string, disabled:boolean, onInstall:Function,
+ *   installedProfile:string|null}} props - Offer
  * @returns {JSX.Element}
  */
-const ProfileOffer = ({ profile, entry, title, note, disabled, onInstall }) => (
-  <Box sx={{ my: 1 }}>
-    <Typography variant="body2">
-      {title} (download {formatBytes(entry?.gzSize)}, disk {formatBytes(entry?.dbSize)})
-      {note ? ` ${note}` : ''}
-    </Typography>
-    <Button size="small" variant="outlined" disabled={disabled} onClick={() => onInstall(profile)} sx={{ mt: 0.5 }}>
-      Download
-    </Button>
-  </Box>
-);
+const ProfileOffer = ({ profile, entry, title, note, disabled, onInstall, installedProfile }) => {
+  const installed = installedProfile === profile;
+  // Sizes only from a validated pointer; without one, no numbers are shown at all.
+  const sizes = Number.isFinite(entry?.gzSize) && Number.isFinite(entry?.dbSize)
+    ? ` (download ${formatBytes(entry.gzSize)}, disk ${formatBytes(entry.dbSize)})`
+    : '';
+  return (
+    <Box sx={{ my: 1 }}>
+      {/* UI round 1b: the title on its own line, the note as secondary text below it. */}
+      <Typography variant="body2">{title}{sizes}</Typography>
+      {note && <Typography variant="body2" color="text.secondary">{note}</Typography>}
+      {installed ? (
+        <Typography variant="body2" color="success.main" sx={{ mt: 0.5 }}>Installed ✓</Typography>
+      ) : (
+        <Button size="small" variant="outlined" disabled={disabled} onClick={() => onInstall(profile)} sx={{ mt: 0.5 }}>
+          {installedProfile ? `Switch to ${profile}` : 'Download'}
+        </Button>
+      )}
+    </Box>
+  );
+};
 
 /**
  * The §4.3 confirmation, shown BEFORE any download. Its numbers come from the
@@ -111,8 +125,8 @@ export const InstallConfirmation = (props) => (
  */
 export const LocalDbSettings = ({
   lookupBackend, installed, state, pointer, pointerError, operation, progress, update, cleanupPending,
-  errorMessage, storageEstimate, onBackendChange, onInstall, onRepair, onUninstall, onCancel, onRetryOwnership,
-  onCheckUpdate
+  errorMessage, errorKind = null, storageEstimate, onBackendChange, onInstall, onRepair, onUninstall, onCancel,
+  onRetryOwnership, onCheckUpdate
 }) => {
   const busy = Boolean(operation);
   const committing = operation?.phase === 'committing' || operation?.phase === 'cleaning';
@@ -130,8 +144,9 @@ export const LocalDbSettings = ({
           onChange={(event) => onBackendChange(event.target.value)}
         >
           <FormControlLabel value="loc-api" control={<Radio />} label="Library of Congress (online)" />
-          <FormControlLabel value="local-db" control={<Radio />} label="Local database" />
+          <FormControlLabel value="local-db" control={<Radio />} label="Local database" disabled={!installed} />
         </RadioGroup>
+        {!installed && <FormHelperText>{INSTALL_FIRST_TEXT}</FormHelperText>}
       </FormControl>
 
       {lookupBackend === 'local-db' && !installed && (
@@ -147,7 +162,11 @@ export const LocalDbSettings = ({
           {state === 'other-tab' ? ' Use the Library of Congress online in this tab.' : ''}
         </Alert>
       )}
-      {errorMessage && (
+      {/* A user's own cancel is not a failure: a neutral notice, no "Try again". */}
+      {errorMessage && errorKind === 'cancelled' && (
+        <Alert severity="info" sx={{ my: 1 }}>{errorMessage}</Alert>
+      )}
+      {errorMessage && errorKind !== 'cancelled' && (
         <Alert severity="error" sx={{ my: 1 }} action={<Button size="small" onClick={() => onInstall(installed?.profile || 'core')}>Try again</Button>}>
           {errorMessage}
         </Alert>
@@ -170,6 +189,9 @@ export const LocalDbSettings = ({
           <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
             <Button size="small" variant="outlined" disabled={busy} onClick={onRepair}>Repair</Button>
             <Button size="small" variant="outlined" color="error" disabled={busy} onClick={onUninstall}>Uninstall</Button>
+            {onCheckUpdate && (
+              <Button size="small" disabled={busy} onClick={onCheckUpdate}>Check for a new release</Button>
+            )}
           </Stack>
         </Box>
       )}
@@ -208,24 +230,36 @@ export const LocalDbSettings = ({
             note="Names are looked up online."
             disabled={busy}
             onInstall={onInstall}
+            installedProfile={installed?.profile ?? null}
           />
-          <Accordion disableGutters elevation={0}>
-            <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-              <Typography variant="body2">Advanced</Typography>
-            </AccordionSummary>
-            <AccordionDetails>
-              <ProfileOffer
-                profile="full"
-                entry={pointer?.profiles.full}
-                title="Full — also 12 million names"
-                note={FULL_WARNING}
-                disabled={busy}
-                onInstall={onInstall}
-              />
-            </AccordionDetails>
-          </Accordion>
-          {onCheckUpdate && (
-            <Button size="small" onClick={onCheckUpdate} sx={{ mt: 1 }}>Check for a new release</Button>
+          {installed?.profile === 'full' ? (
+            // The installed profile is never hidden inside "Advanced".
+            <ProfileOffer
+              profile="full"
+              entry={pointer?.profiles.full}
+              title="Full — also 12 million names"
+              note={FULL_WARNING}
+              disabled={busy}
+              onInstall={onInstall}
+              installedProfile="full"
+            />
+          ) : (
+            <Accordion disableGutters elevation={0}>
+              <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                <Typography variant="body2">Advanced</Typography>
+              </AccordionSummary>
+              <AccordionDetails>
+                <ProfileOffer
+                  profile="full"
+                  entry={pointer?.profiles.full}
+                  title="Full — also 12 million names"
+                  note={FULL_WARNING}
+                  disabled={busy}
+                  onInstall={onInstall}
+                  installedProfile={installed?.profile ?? null}
+                />
+              </AccordionDetails>
+            </Accordion>
           )}
         </Box>
       )}
@@ -319,6 +353,7 @@ export const LocalDbPanel = () => {
   const [status, setStatus] = useState(() => localDbClient?.snapshot() || { state: 'other-tab', record: null });
   const [release, setRelease] = useState(() => localDbUpdates?.snapshot() || { pointer: null, error: null, update: null });
   const [errorMessage, setErrorMessage] = useState(null);
+  const [errorKind, setErrorKind] = useState(null);
   const [storageEstimate, setStorageEstimate] = useState(null);
   const [pending, setPending] = useState(null);
 
@@ -345,7 +380,11 @@ export const LocalDbPanel = () => {
     try {
       await fn(crypto.randomUUID());
     } catch (err) {
-      if (mounted.current) setErrorMessage(err?.message || 'The local database operation failed.');
+      if (mounted.current) {
+        setErrorMessage(err?.message || 'The local database operation failed.');
+        // The kind decides how it is shown: a user's cancel is not a failure.
+        setErrorKind(err?.kind ?? null);
+      }
     } finally {
       await reload();
     }
@@ -399,6 +438,7 @@ export const LocalDbPanel = () => {
         update={release.update}
         cleanupPending={isCleanupPending(settings)}
         errorMessage={errorMessage}
+        errorKind={errorKind}
         storageEstimate={storageEstimate}
         onBackendChange={async (id) => {
           await setLookupBackend(id);

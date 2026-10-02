@@ -4,14 +4,9 @@ import {
     TextField,
     Button,
     Typography,
-    Paper,
-    Accordion,
-    AccordionSummary,
-    AccordionDetails,
     Snackbar,
     Alert
 } from '@mui/material';
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { useAppContext } from '../context/AppContext';
 
 const STALE_RULES_MESSAGE = 'The rules were changed in another tab — reload them. Your text is kept until you reload.';
@@ -26,15 +21,9 @@ const SystemPromptEditor = () => {
         systemPromptStale
     } = useAppContext();
 
-    const [expanded, setExpanded] = useState(false);
     const [snackbarOpen, setSnackbarOpen] = useState(false);
     const [snackbarMessage, setSnackbarMessage] = useState('');
     const [snackbarSeverity, setSnackbarSeverity] = useState('success');
-
-    // Handle accordion expansion
-    const handleAccordionChange = (event, isExpanded) => {
-        setExpanded(isExpanded);
-    };
 
     // Handle text changes
     const handleTextChange = (e) => {
@@ -77,16 +66,10 @@ const SystemPromptEditor = () => {
         setSnackbarOpen(false);
     };
 
+    // UI round 1b: shown directly inside the Settings section "Selection
+    // rules (advanced)", which is its one title (no inner accordion).
     return (
-        <Accordion expanded={expanded} onChange={handleAccordionChange}>
-            <AccordionSummary
-                expandIcon={<ExpandMoreIcon />}
-                aria-controls="system-prompt-content"
-                id="system-prompt-header"
-            >
-                <Typography variant="subtitle1">LCSH Selection Rules (Advanced)</Typography>
-            </AccordionSummary>
-            <AccordionDetails>
+        <Box id="system-prompt-content">
                 <Box>
                     <Typography variant="body2" color="text.secondary" paragraph>
                         These rules guide the AI when it suggests Library of Congress Subject Headings.
@@ -141,8 +124,7 @@ const SystemPromptEditor = () => {
                         {snackbarMessage}
                     </Alert>
                 </Snackbar>
-            </AccordionDetails>
-        </Accordion>
+        </Box>
     );
 };
 

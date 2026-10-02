@@ -22,7 +22,8 @@ export const useAppContext = () => useContext(AppContext);
 export const SETTINGS_LOAD_ERROR = 'Settings could not be loaded. Reload the page or check Chrome storage.';
 
 /** Workflow steps (§7) and the pipeline operations each one owns. */
-export const STEP_OPERATIONS = { 0: ['suggest'], 1: [], 2: ['lookup', 'select'], 3: [], 4: [] };
+// UI round 1: History is a view, not a step, so there are 4 workflow steps.
+export const STEP_OPERATIONS = { 0: ['suggest'], 1: [], 2: ['lookup', 'select'], 3: [] };
 
 export const EMPTY_BIBLIOGRAPHIC_INFO = {
   title: '', author: '', abstract: '', tableOfContents: '', notes: '', images: []
@@ -58,7 +59,7 @@ export const loadActiveConfig = async () => {
  * created in app.jsx above the hash routes. The popup passes nothing, so it
  * never takes ownership.
  */
-export const AppProvider = ({ children, localDbClient = null, localDbUpdates = null }) => {
+export const AppProvider = ({ children, localDbClient = null, localDbUpdates = null, initialHistoryOpen = false }) => {
   const [bibliographicInfo, setBibliographicInfo] = useState(EMPTY_BIBLIOGRAPHIC_INFO);
 
   // State for system prompt: the editor text, the stored value it was loaded from, and a stale flag
@@ -87,6 +88,11 @@ export const AppProvider = ({ children, localDbClient = null, localDbUpdates = n
   const run = useSyncExternalStore(workflow.subscribe, workflow.getState, workflow.getState);
 
   const [activeStep, setActiveStepState] = useState(0);
+  // UI round 1: the History VIEW opens over the workflow, like Settings. The
+  // workflow stays mounted, and opening or closing it leaves no step.
+  const [historyOpen, setHistoryOpen] = useState(initialHistoryOpen);
+  const openHistory = () => setHistoryOpen(true);
+  const closeHistory = () => setHistoryOpen(false);
   const activeStepRef = useRef(0);
   const [error, setError] = useState(null);
   const [conversationHistory, setConversationHistory] = useState([]);
@@ -184,6 +190,9 @@ export const AppProvider = ({ children, localDbClient = null, localDbUpdates = n
     run,
     activeStep,
     setActiveStep,
+    historyOpen,
+    openHistory,
+    closeHistory,
     error,
     setError,
     conversationHistory,

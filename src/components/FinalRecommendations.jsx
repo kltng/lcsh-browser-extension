@@ -105,7 +105,9 @@ export const RecommendationsPanel = ({ recommendations, selections, suggestions,
 };
 
 const FinalRecommendations = () => {
-  const { run, workflow, setActiveStep, saveRunToHistory } = useAppContext();
+  const {
+    run, workflow, setActiveStep, saveRunToHistory, openHistory = () => {}
+  } = useAppContext();
   const [snackbar, setSnackbar] = useState('');
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
@@ -154,7 +156,8 @@ const FinalRecommendations = () => {
     try {
       await saveRunToHistory();
       setSnackbar('Saved');
-      setActiveStep(4);
+      // History is a view, not a step: the workflow keeps its step and state.
+      openHistory();
     } catch (err) {
       setSaveError(err?.message || 'The history could not be saved.');
     } finally {

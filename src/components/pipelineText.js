@@ -8,6 +8,68 @@ import { lookupErrorMessage } from '../services/lookup/scheduler';
 export const SUGGESTION_NOTE = 'These are AI suggestions. The next step looks them up at the Library of Congress.';
 export const NO_MATCH_TEXT = 'No match returned by this search';
 export const LOCAL_DB_ERROR_TEXT = 'The local database could not answer this search';
+/**
+ * Plain words for the match classes (SPEC-P4 §4.4) and the retrieval kinds
+ * (SPEC-P5 §8). The class meanings: `exact-full` — the record's label equals
+ * the whole suggested heading; `exact-main` — it equals the suggestion's main
+ * heading (the part before `--`); `prefix-full` — it starts with the whole
+ * suggested heading (a longer heading); `prefix-main` — it starts with the
+ * main heading; `keyword` — anything else the keyword search returned.
+ */
+export const MATCH_CLASS_LABELS = {
+  'exact-full': 'Exact match',
+  exact: 'Exact match',
+  'exact-main': 'Main heading matches',
+  'prefix-full': 'Longer heading',
+  'prefix-main': 'Starts with the main heading',
+  keyword: 'Keyword match',
+  variant: 'Matched a variant name',
+  replacement: 'Replaces an old heading'
+};
+
+/**
+ * The ONE label function for a match class, used wherever a class is shown.
+ * @param {string} matchClass - A match class (or a retrieval kind)
+ * @returns {string} - Plain words; "Other match" for anything unknown
+ */
+export const matchClassLabel = (matchClass) => (
+  Object.hasOwn(MATCH_CLASS_LABELS, matchClass) ? MATCH_CLASS_LABELS[matchClass] : 'Other match'
+);
+
+/**
+ * The spelling note of a chosen candidate, only when it is below 100 %.
+ * @param {number|null} similarity - Lexical similarity
+ * @returns {string|null}
+ */
+export const similarityText = (similarity) => (
+  Number.isFinite(similarity) && similarity < 100 ? `${similarity}% similar spelling` : null
+);
+
+/**
+ * The summary line of the Matches page, counted from the lookup results.
+ * @param {object[]} suggestions - Suggestions
+ * @param {Object<string,object>} results - LookupResult by suggestionId
+ * @param {Object<string,boolean>} [pending] - Running lookups
+ * @returns {string}
+ */
+export const matchesSummary = (suggestions, results, pending = {}) => {
+  const counts = { matched: 0, none: 0, failed: 0, searching: 0, waiting: 0 };
+  for (const s of suggestions) {
+    const result = results[s.id];
+    if (pending[s.id]) counts.searching += 1;
+    else if (!result) counts.waiting += 1;
+    else if (result.outcome === 'found' || result.outcome === 'partial') counts.matched += 1;
+    else if (result.outcome === 'no-results') counts.none += 1;
+    else counts.failed += 1;
+  }
+  const n = suggestions.length;
+  const parts = [`${counts.matched} matched`, `${counts.none} with no match`];
+  if (counts.failed > 0) parts.push(`${counts.failed} failed`);
+  if (counts.searching > 0) parts.push(`${counts.searching} still searching`);
+  if (counts.waiting > 0) parts.push(`${counts.waiting} not looked up yet`);
+  return `${n} suggestion${n === 1 ? '' : 's'}: ${parts.join(', ')}`;
+};
+
 /** `via` in words (SPEC-P5 §8). A variant match is never an automatic exact acceptance. */
 export const VIA_WORDS = { variant: 'matched a variant name', replacement: 'replaces an old heading' };
 

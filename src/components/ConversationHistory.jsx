@@ -6,6 +6,7 @@ import {
 import DeleteIcon from '@mui/icons-material/Delete';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import { useAppContext, EMPTY_BIBLIOGRAPHIC_INFO } from '../context/AppContext';
 import {
   runViewOf, adaptLegacyEntry, legacyMarcCopyText, LEGACY_HEADER, LEGACY_MARC_LABEL, LEGACY_TEXT_LABEL
@@ -73,6 +74,7 @@ export const V2EntryView = ({ entry }) => {
           selections={view.selections}
           mode={view.selectMode}
           readOnly
+          runId={String(entry.id)}
         />
       </Section>
       <Section title="Recommendations">
@@ -152,7 +154,8 @@ export const LegacyEntryView = ({ entry, onCopy }) => {
 
 const ConversationHistory = () => {
   const {
-    conversationHistory, deleteConversation, clearConversationHistory, setActiveStep, setBibliographicInfo, error, setError
+    conversationHistory, deleteConversation, clearConversationHistory, setActiveStep, setBibliographicInfo, error, setError,
+    closeHistory = () => {}
   } = useAppContext();
   const [deleteId, setDeleteId] = useState(null);
   const [clearOpen, setClearOpen] = useState(false);
@@ -161,7 +164,16 @@ const ConversationHistory = () => {
   const handleNewSearch = () => {
     setBibliographicInfo(EMPTY_BIBLIOGRAPHIC_INFO);
     setActiveStep(0);
+    closeHistory();
   };
+
+  // History is a view over the workflow (UI round 1), like Settings.
+  const header = (
+    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
+      <Typography variant="h6">History</Typography>
+      <Button startIcon={<ArrowBackIcon />} onClick={closeHistory}>Back to the workflow</Button>
+    </Box>
+  );
 
   const confirmDelete = () => {
     const id = deleteId;
@@ -190,16 +202,19 @@ const ConversationHistory = () => {
 
   if (!conversationHistory || conversationHistory.length === 0) {
     return (
-      <Box sx={{ textAlign: 'center', py: 4 }}>
-        <Typography variant="h6" color="text.secondary">No history yet.</Typography>
-        <Button variant="contained" onClick={handleNewSearch} sx={{ mt: 2 }}>Start New Search</Button>
+      <Box>
+        {header}
+        <Box sx={{ textAlign: 'center', py: 4 }}>
+          <Typography variant="h6" color="text.secondary">No history yet.</Typography>
+          <Button variant="contained" onClick={handleNewSearch} sx={{ mt: 2 }}>Start New Search</Button>
+        </Box>
       </Box>
     );
   }
 
   return (
     <Box>
-      <Typography variant="h6" gutterBottom>History</Typography>
+      {header}
       <KeysUnavailableNotice />
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
       <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 3 }}>
