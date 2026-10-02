@@ -236,8 +236,69 @@ describe('[P5 row7] a damaged or oversized download changes nothing', () => {
     const pointer = pointerFor({ profile: PROFILE, bytes, sha256Hex });
     const env = setup({ fetchImpl: vi.fn(async () => ({ status: 200, body: bodyStream(pointer.gz.slice(0, 20)) })) });
     env.pointer = pointer;
-    await expect(env.installer.install({ pointer, profile: PROFILE, operationId: 'op1' })).rejects.toBeInstanceOf(InstallError);
+    // SPEC-P5 v2.7 §4.4 step 4: the body ended normally, so this is `damaged`.
+    await expect(env.installer.install({ pointer, profile: PROFILE, operationId: 'op1' }))
+      .rejects.toMatchObject({ name: 'InstallError', kind: 'damaged' });
     expect([...env.pool.files.keys()]).toEqual([]);
+  });
+
+  // Live finding (lead, fix 9, §13 row 8): one flipped byte in the real gzip
+  // showed "Check your connection" (kind `network`).
+  describe('[P5 fix9] a gzip decoding failure is damaged, a body failure is network (§4.4 step 4)', () => {
+    const bytes = dbBytes();
+    const pointer = pointerFor({ profile: PROFILE, bytes, sha256Hex });
+    const installWith = (body) => {
+      const env = setup({ fetchImpl: vi.fn(async () => ({ status: 200, body })) });
+      env.pointer = pointer;
+      return { env, done: env.installer.install({ pointer, profile: PROFILE, operationId: 'op1' }) };
+    };
+    const flipped = (at) => {
+      const gz = Uint8Array.from(pointer.gz);
+      gz[at] ^= 0xff;
+      return gz;
+    };
+
+    it('(a) an invalid gzip body that the fetch delivers COMPLETELY is damaged', async () => {
+      // A broken header, and a flipped byte in the CRC-32 trailer (the decoder's own check).
+      for (const gz of [flipped(0), flipped(pointer.gz.length - 6)]) {
+        const { env, done } = installWith(bodyStream(gz, { chunkSize: 64 }));
+        await expect(done).rejects.toMatchObject({ name: 'InstallError', kind: 'damaged' });
+        expect([...env.pool.files.keys()]).toEqual([]);
+        expect(env.bridge.commits.filter((c) => Object.hasOwn(c.patch, 'localDb'))).toEqual([]);
+      }
+    });
+
+    it('(b) a truncated gzip body that ENDS NORMALLY is damaged', async () => {
+      for (const length of [20, Math.floor(pointer.gz.length / 2), pointer.gz.length - 1]) {
+        const { env, done } = installWith(bodyStream(pointer.gz.slice(0, length), { chunkSize: 64 }));
+        await expect(done, String(length)).rejects.toMatchObject({ name: 'InstallError', kind: 'damaged' });
+        expect([...env.pool.files.keys()]).toEqual([]);
+      }
+    });
+
+    it('(c) a body stream that ERRORS mid-download is network', async () => {
+      const half = pointer.gz.slice(0, Math.floor(pointer.gz.length / 2));
+      let sent = false;
+      const body = new ReadableStream({
+        pull(controller) {
+          if (!sent) {
+            sent = true;
+            controller.enqueue(half);
+            return;
+          }
+          controller.error(new TypeError('network error'));
+        }
+      });
+      const { env, done } = installWith(body);
+      await expect(done).rejects.toMatchObject({ name: 'InstallError', kind: 'network' });
+      expect([...env.pool.files.keys()]).toEqual([]);
+    });
+
+    it('(c) a body that errors before its first byte is network as well', async () => {
+      const body = new ReadableStream({ pull(controller) { controller.error(new TypeError('connection reset')); } });
+      const { done } = installWith(body);
+      await expect(done).rejects.toMatchObject({ kind: 'network' });
+    });
   });
 
   it('a non-200 answer is a network failure and nothing is staged', async () => {

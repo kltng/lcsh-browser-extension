@@ -126,10 +126,42 @@ export const streamDatabase = async ({
     }
   };
 
-  const failure = (err) => {
+  // v2.7 §4.4 step 4: WHERE an error arose decides its kind, never its text.
+  // This is set only when the HTTP response body itself fails.
+  let bodyFailed = false;
+
+  const failure = (err, { afterDecoder = false } = {}) => {
     if (err instanceof InstallError) return err;
     if (isCancelled()) return new InstallError('cancelled');
-    return new InstallError(controller.signal.aborted ? 'network_stalled' : 'network');
+    if (controller.signal.aborted) return new InstallError('network_stalled');
+    // An error below the decoder while the body delivered without error came
+    // from the gzip decoder: the bytes received do not match the release.
+    if (afterDecoder && !bodyFailed) return new InstallError('damaged');
+    return new InstallError('network');
+  };
+
+  /**
+   * The response body, unchanged, but with its own failures marked. The
+   * high-water mark 0 means it reads the body only when the pipe asks, so it
+   * buffers nothing and backpressure is unchanged.
+   */
+  const markedBody = (body) => {
+    const source = body.getReader();
+    return new ReadableStream({
+      async pull(stream) {
+        let step;
+        try {
+          step = await source.read();
+        } catch (err) {
+          bodyFailed = true;
+          stream.error(err);
+          return;
+        }
+        if (step.done) stream.close();
+        else stream.enqueue(step.value);
+      },
+      cancel: (reason) => source.cancel(reason)
+    }, { highWaterMark: 0 });
   };
 
   try {
@@ -146,7 +178,7 @@ export const streamDatabase = async ({
 
     const gzHash = createSha256();
     const dbHash = createSha256();
-    reader = res.body
+    reader = markedBody(res.body)
       .pipeThrough(meteredStream(gzHash, entry.gzSize))
       .pipeThrough(decompressionStream())
       .pipeThrough(meteredStream(dbHash, entry.dbSize))
@@ -165,7 +197,7 @@ export const streamDatabase = async ({
       try {
         step = await race(reader.read());
       } catch (err) {
-        throw failure(err);
+        throw failure(err, { afterDecoder: true });
       }
       if (step.done) return undefined;
       lastByteAt = now();
