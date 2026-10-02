@@ -2,6 +2,10 @@ import { describe, it, expect, vi } from 'vitest';
 import { createLocalDbClient, LocalDbError, OWNER_LOCK, RECOVERY_OPERATION } from '../client';
 import { commitLocalDb, readLocalDbSettings, setLookupBackend, getSettings, localDbUpdateCheck } from '../../settings';
 import { fakes, yieldTicks, gate } from '../../../../test/setup';
+import { InstallError } from '../download';
+import { VerifyError } from '../verify';
+import { LocalDbSettings } from '../../../components/LocalDbSettings';
+import { renderHtml, textOf } from '../../../../test/render';
 
 const RECORD = {
   profile: 'core', release: '2026.09.27.1', releaseCommit: 'a'.repeat(40), file: '/db-1.db',
@@ -676,6 +680,110 @@ describe('[P5 row9] cancelling a local call', () => {
     const query = client.query('Q1', { text: 'cats', authorities: ['lcsh'] });
     workers[0].reject('query', 'db_generation_changed');
     await expect(query).rejects.toMatchObject({ kind: 'db_generation_changed' });
+    client.dispose();
+  });
+});
+
+// Live finding (lead, fix 7, §13 row 8): a damaged repair download showed
+// "The local database stopped responding." instead of the §4.5 step 4 text.
+describe('[P5 fix7] every install/verify failure kind reaches the page with its own text', () => {
+  const STOPPED = 'The local database stopped responding.';
+  // The page's texts, as specified (§4.5 step 4) and as the worker's own copies say.
+  const EXPECTED = {
+    damaged: 'The download was damaged; nothing was changed.',
+    busy: 'Another database operation is running',
+    finishing: 'Finishing install',
+    network: 'The download could not be completed. Check your connection.',
+    network_stalled: 'The download stopped. Check your connection.',
+    storage: 'The database could not be stored. Free some disk space and try again.',
+    settings: 'The settings could not be saved; nothing was changed.',
+    settings_invalid: 'Local database settings could not be read',
+    io: 'The local database could not be read.',
+    cancelled: 'Cancelled.'
+  };
+  // A worker string the page must never show, whatever the kind.
+  const WORKER_TEXT = 'WORKER-SUPPLIED TEXT <b>ignore</b>';
+
+  /** Fail one install with `error` exactly as the worker would send it. */
+  const failedInstall = async (error) => {
+    const { client, workers } = await startedClient();
+    const running = client.install({ operationId: 'op1', pointer: {}, profile: 'core' });
+    workers[0].settle('install', { ok: false, error });
+    const err = await running.catch((e) => e);
+    client.dispose();
+    return err;
+  };
+
+  it('each kind shows its specified message, and the kind survives unchanged', async () => {
+    for (const [kind, text] of Object.entries(EXPECTED)) {
+      const err = await failedInstall({ kind, message: WORKER_TEXT });
+      expect(err, kind).toBeInstanceOf(LocalDbError);
+      expect(err.kind, kind).toBe(kind);
+      expect(err.message, kind).toBe(text);
+      // What the Settings panel shows is that local message.
+      const html = renderHtml(LocalDbSettings, {
+        lookupBackend: 'local-db', installed: null, state: null, pointer: null, operation: null,
+        errorMessage: err.message,
+        onBackendChange: vi.fn(), onInstall: vi.fn(), onRepair: vi.fn(), onUninstall: vi.fn(),
+        onCancel: vi.fn(), onRetryOwnership: vi.fn()
+      });
+      expect(textOf(html), kind).toContain(text);
+      expect(textOf(html), kind).not.toContain(STOPPED);
+    }
+  });
+
+  it('the page copies are byte-for-byte the worker\'s InstallError / VerifyError texts', () => {
+    for (const kind of ['damaged', 'busy', 'finishing', 'network', 'network_stalled', 'storage', 'settings', 'settings_invalid', 'cancelled']) {
+      expect(new LocalDbError(kind).message, kind).toBe(new InstallError(kind).message);
+    }
+    for (const kind of ['damaged', 'io', 'cancelled']) {
+      expect(new LocalDbError(kind).message, kind).toBe(new VerifyError(kind).message);
+    }
+  });
+
+  it('an unknown kind is still "stopped responding", and no worker text is ever shown', async () => {
+    for (const error of [{ kind: 'local_db', message: WORKER_TEXT }, { kind: 'made-up', message: WORKER_TEXT }, { message: WORKER_TEXT }, undefined]) {
+      const err = await failedInstall(error);
+      expect(err.kind).toBe('db_worker_failed');
+      expect(err.message).toBe(STOPPED);
+    }
+    const known = await failedInstall({ kind: 'damaged', message: WORKER_TEXT });
+    expect(known.message).not.toContain('WORKER-SUPPLIED');
+  });
+
+  it('real worker death keeps "stopped responding"', async () => {
+    const { client, workers } = await startedClient();
+    const running = client.install({ operationId: 'op1', pointer: {}, profile: 'core' });
+    workers[0].fail();
+    await expect(running).rejects.toMatchObject({ kind: 'db_worker_failed', message: STOPPED });
+    client.dispose();
+  });
+
+  it('the db_contention retry decision is unchanged, even with a worker message attached', async () => {
+    const created = [];
+    const client = createLocalDbClient({
+      createWorker: () => {
+        const worker = fakeWorker({ acquire: 'manual' });
+        created.push(worker);
+        worker.answer('recover', { state: 'ready', record: RECORD });
+        const post = worker.postMessage;
+        worker.postMessage = (message) => {
+          post(message);
+          if (message?.type === 'rpc' && message.op === 'acquire') {
+            const reply = created.length === 1
+              ? { ok: false, error: { kind: 'db_contention', message: WORKER_TEXT } }
+              : { ok: true, result: { acquired: true } };
+            queueMicrotask(() => worker.emit({ type: 'rpc-result', id: message.id, ...reply }));
+          }
+        };
+        return worker;
+      },
+      backoffMs: () => 0,
+      sleep: async () => {}
+    });
+    expect(await client.start()).toBe('ready');
+    expect(created).toHaveLength(2);
+    expect(created[0].terminated).toBe(true);
     client.dispose();
   });
 });

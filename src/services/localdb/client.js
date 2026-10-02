@@ -38,7 +38,27 @@ export const RECOVERY_OPERATION = 'internal-recovery';
 /** Phases after which Cancel stays disabled until the operation ends (§8). */
 export const FINAL_PHASES = ['committing', 'cleaning'];
 
+/**
+ * The install/verify failure kinds the worker reports (download.js
+ * `InstallError`, verify.js `VerifyError`), with the PAGE's own copy of each
+ * text (§4.5 step 4, §4.8). The page never shows a message string it received
+ * from the worker (HOUSE_RULES 6): it maps the kind to this text. The copies
+ * are pinned byte-for-byte against the worker's by a test.
+ */
+export const INSTALL_FAILURE_MESSAGES = {
+  busy: 'Another database operation is running',
+  finishing: 'Finishing install',
+  damaged: 'The download was damaged; nothing was changed.',
+  network: 'The download could not be completed. Check your connection.',
+  network_stalled: 'The download stopped. Check your connection.',
+  storage: 'The database could not be stored. Free some disk space and try again.',
+  settings: 'The settings could not be saved; nothing was changed.',
+  settings_invalid: 'Local database settings could not be read',
+  io: 'The local database could not be read.'
+};
+
 const MESSAGES = {
+  ...INSTALL_FAILURE_MESSAGES,
   db_worker_failed: 'The local database stopped responding.',
   db_busy: 'The local database is in use. Close the other tab and try again.',
   // §3.2 acquisition kinds. They must survive the trip to the page: the retry
