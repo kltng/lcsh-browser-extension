@@ -51,6 +51,15 @@ The current Store description says "using Gemini API", which will be wrong.
 I will draft replacement text and the privacy-policy additions (multiple
 providers, on-device Nano, the optional Hugging Face download); you submit.
 
+## 4b. Slow first search with the full database (decision, not urgent)
+
+With the full database (12 million names), the FIRST search of a session for
+a very common word is slow: "john" took about 6 seconds once, then about
+0.4 seconds every time after. All other searches are well under 1 second.
+Options: (a) accept it; (b) warm the database up quietly when the tab opens;
+(c) give SQLite a larger memory cache. My suggestion is (a) for this release.
+Details: docs/multi_agent/P5_ACCEPTANCE.md, §11 timings.
+
 ## 5. Decisions already recorded (no action needed)
 
 - Database profiles: `core` is the default; `full` is an advanced opt-in with
