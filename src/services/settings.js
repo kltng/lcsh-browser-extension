@@ -185,7 +185,7 @@ export const readLocalDbSettings = async () => {
  * @param {(()=>void)|null} [faultHook] - Fault build only (§21 `settings-write`)
  * @returns {Promise<{ok:boolean, reason?:string, current:object}>}
  */
-export const commitLocalDb = async ({ expectedLocalDb = null, patch = {}, fence = () => true }, faultHook = null) => {
+export const commitLocalDb = async ({ expectedLocalDb = null, patch = {}, fence = () => true }, faultHook) => {
   for (const key of Object.keys(patch)) {
     if (!LOCAL_DB_PATCH_KEYS.includes(key)) throw new Error(`Not a local database patch field: ${key}`);
   }

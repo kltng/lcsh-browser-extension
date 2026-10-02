@@ -1,9 +1,10 @@
 /**
  * The fault-injection test build (SPEC-P5 §21). NOTHING here runs in the
- * shipped extension: every caller reaches this module only inside a
- * compile-time `if (__LCSH_FAULTS__)` branch, which is `false` in
- * `webpack.prod.js` and `webpack.dev.js`. The module itself has no
- * top-level side effects, so the production minimizer drops it.
+ * shipped extension: it is LOADED only by a `require()` inside a compile-time
+ * `if (__LCSH_FAULTS__)` branch (app.jsx, worker.js), which is `false` in
+ * `webpack.prod.js` and `webpack.dev.js`. Webpack does not follow a require in
+ * a dead branch, so neither build contains this module or runs its top-level
+ * initialization. No production file imports it statically.
  *
  * Ownership (§21 "Plan"): the PAGE parses the plan once, owns the delete
  * occurrence counter and the consumed-point set, and acknowledges every claim
@@ -60,11 +61,14 @@ export function parseFaultPlan(search, warn = () => {}) {
     }
     let occurrence = 1;
     if (occurrenceText !== undefined) {
-      if (point !== 'delete' || !/^[1-9]\d*$/.test(occurrenceText)) {
+      // The spelling AND the converted value: "9…9" can become Infinity or
+      // round to a different number, so only a safe positive integer counts.
+      const value = Number(occurrenceText);
+      if (point !== 'delete' || !/^[1-9]\d*$/.test(occurrenceText) || !Number.isSafeInteger(value)) {
         warn(`[fault] ignored "${entry}": invalid occurrence number`);
         continue;
       }
-      occurrence = Number(occurrenceText);
+      occurrence = value;
     }
     if (plan.has(point)) {
       warn(`[fault] ignored "${entry}": duplicate entry for ${point}`);

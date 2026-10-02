@@ -280,6 +280,19 @@ describe('[P5 §21] the fault plan', () => {
     expect(warnings.join('\n')).toMatch(/duplicate entry for commit-before/);
   });
 
+  // Review-5 finding 3: the converted value is checked, not only its spelling.
+  it('an occurrence that is not a safe positive integer after conversion is ignored with the warning', () => {
+    for (const digits of ['9'.repeat(400), '9007199254740993', String(Number.MAX_SAFE_INTEGER + 1)]) {
+      const warnings = [];
+      const plan = parseFaultPlan(`?faults=delete@${digits}:throw`, (text) => warnings.push(text));
+      expect(plan.has('delete'), digits.slice(0, 20)).toBe(false);
+      expect(warnings).toEqual([`[fault] ignored "delete@${digits}:throw": invalid occurrence number`]);
+    }
+    // The largest safe value is still accepted exactly.
+    const max = String(Number.MAX_SAFE_INTEGER);
+    expect(parseFaultPlan(`?faults=delete@${max}:throw`).get('delete')).toEqual({ mode: 'throw', occurrence: Number.MAX_SAFE_INTEGER });
+  });
+
   it('the page sends only unconsumed WORKER points, and a consumed point never fires again', () => {
     const logs = [];
     const faults = createDocumentFaults({ search: '?faults=commit-before:crash,settings-write:throw', log: (...a) => logs.push(a), warn: () => {} });

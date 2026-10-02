@@ -3,8 +3,10 @@ import { MatchesPanel } from '../ScrapedResults';
 import { RecommendationsPanel, hasUnresolvedNameKeys } from '../FinalRecommendations';
 import {
   LocalDbSettings, ConfirmationBody, subscribePanel, confirmationLines, formatBytes, KEEP_TAB_OPEN, FULL_WARNING, COMMITTING_TEXT,
-  UNINSTALLING_TEXT
+  UNINSTALLING_TEXT, isCleanupPending
 } from '../LocalDbSettings';
+import { commitLocalDb } from '../../services/settings';
+import { fakes } from '../../../test/setup';
 import { createLocalDbClient } from '../../services/localdb/client';
 import { V2EntryView } from '../ConversationHistory';
 import { lcLink, sourceLine, viaNote, replacementNoteText, LOCAL_DB_ERROR_TEXT } from '../pipelineText';
@@ -441,6 +443,63 @@ describe('[P5 row12] the Lookup source settings section', () => {
     expect(text).not.toContain('Cancel');
     // While a mutation runs, no new download can be started either.
     expect(text).not.toContain('Core — subjects and genres');
+  });
+});
+
+// Live finding (lead, fix 8): "Cleanup pending" stayed after §3.4 recovery had
+// emptied `localDbPendingDeletes` through the worker's bridge.
+describe('[P5 fix8] the Cleanup pending notice follows the CURRENT stored list', () => {
+  const RECORD = {
+    profile: 'core', release: '2026.09.27.1', releaseCommit: 'a'.repeat(40), file: '/db-2.db',
+    dbSize: 4096, sha256Db: 'b'.repeat(64), compatFingerprint: 'FP', installedAt: '2026-09-27T00:00:00.000Z'
+  };
+  const NOTICE = 'Cleanup pending: an old database file could not be deleted yet.';
+  // A ready client with no running operation: recovery is not a panel operation.
+  const idleClient = {
+    operation: () => null,
+    snapshot: () => ({ state: 'ready', record: RECORD, operation: null, progress: null, gated: false }),
+    onChange: (fn) => { fn(idleClient.snapshot()); return () => {}; },
+    onProgress: (fn) => { fn(idleClient.snapshot()); return () => {}; }
+  };
+  const noticeOf = (settings) => textOf(renderHtml(LocalDbSettings, {
+    lookupBackend: settings.lookupBackend, installed: settings.localDb, state: null, pointer: null, operation: null,
+    cleanupPending: isCleanupPending(settings),
+    onBackendChange: vi.fn(), onInstall: vi.fn(), onRepair: vi.fn(), onUninstall: vi.fn(),
+    onCancel: vi.fn(), onRetryOwnership: vi.fn()
+  })).includes(NOTICE);
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
+
+  it('a recovery that empties the list removes the notice without a reload, in this tab and another', async () => {
+    fakes.storage.seed({ lookupBackend: 'local-db', localDb: RECORD, localDbPendingDeletes: ['/db-1.db'] });
+    // This tab's panel and a panel in another open tab of the extension.
+    const here = [];
+    const other = [];
+    const stopHere = subscribePanel({ client: idleClient, updates: null, onStatus: vi.fn(), onRelease: vi.fn(), onSettings: (s) => here.push(s) });
+    const stopOther = subscribePanel({ client: null, updates: null, onStatus: vi.fn(), onRelease: vi.fn(), onSettings: (s) => other.push(s) });
+    await settle();
+    expect(noticeOf(here.at(-1))).toBe(true);
+    expect(noticeOf(other.at(-1))).toBe(true);
+
+    // §3.4 step 4: recovery deleted the file and clears its entry through the bridge.
+    const answer = await commitLocalDb({ expectedLocalDb: RECORD, patch: { pendingDeletesRemove: ['/db-1.db'] } });
+    expect(answer.ok).toBe(true);
+    await settle();
+    expect(here.at(-1).localDbPendingDeletes).toEqual([]);
+    expect(noticeOf(here.at(-1))).toBe(false);
+    expect(noticeOf(other.at(-1))).toBe(false);
+
+    // A later failed retirement adds an entry again: the notice comes back.
+    await commitLocalDb({ expectedLocalDb: RECORD, patch: { pendingDeletesAdd: ['/db-3.db'] } });
+    await settle();
+    expect(noticeOf(here.at(-1))).toBe(true);
+
+    // After unsubscribing, nothing more is delivered.
+    stopHere();
+    stopOther();
+    const count = here.length;
+    await commitLocalDb({ expectedLocalDb: RECORD, patch: { pendingDeletesRemove: ['/db-3.db'] } });
+    await settle();
+    expect(here).toHaveLength(count);
   });
 });
 

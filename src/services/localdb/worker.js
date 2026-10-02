@@ -27,7 +27,6 @@ import { createInstaller, InstallError } from './install';
 import { createFilePointerVfs, VerifyError } from './verify';
 import { acquirePool, installRemoveEntryGuard, AcquireError, POOL_NAME } from './guard';
 import { monotonicNow, macrotask } from './budget';
-import { createWorkerFaults } from './faults';
 
 export { POOL_NAME };
 /** A lost bridge answer is an UNRESOLVED commit (§4.5 step 7), not a silent hang. */
@@ -65,7 +64,7 @@ export const createWorkerDispatcher = ({
   clearTimeoutImpl = clearTimeout,
   monotonic = monotonicNow,
   yieldToMacrotask = macrotask
-}, faultEnv = null) => {
+}, faultEnv) => {
   let pool = null;
   let installer = null;
   // §3.2 rule 2: ONE acquisition attempt per worker. 'none' → 'acquiring' →
@@ -83,7 +82,8 @@ export const createWorkerDispatcher = ({
   // running install will commit under.
   let workerGeneration = null;
   // SPEC-P5 §21: the fault hooks of this worker, from its first `acquire`.
-  let faults = null;
+  // Declared without a value; it is assigned only in the fault build.
+  let faults;
 
   /** One bridge round trip to the page (§3.3), for one named operation. */
   const askBridge = (operationId, payload) => new Promise((resolve, reject) => {
@@ -122,6 +122,8 @@ export const createWorkerDispatcher = ({
   const acquire = (args = {}) => {
     // §21: the plan travels ONLY in the first `acquire`, before any recovery.
     if (__LCSH_FAULTS__ && args.faults && acquisition === 'none' && !faults) {
+      // The helper is loaded HERE, so the shipped build never loads it.
+      const { createWorkerFaults } = require('./faults');
       faults = createWorkerFaults({
         plan: args.faults,
         workerGeneration,

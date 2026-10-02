@@ -5,7 +5,7 @@ import {
   List, ListItem, ListItemText
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
-import { getSettings, setLookupBackend } from '../services/settings';
+import { getSettings, setLookupBackend, onSettingsChanged, LOCAL_DB_KEYS } from '../services/settings';
 import { useAppContext } from '../context/AppContext';
 
 /** Human sizes; the values always come from the pointer, never from a guess. */
@@ -240,6 +240,17 @@ export const LocalDbSettings = ({
   );
 };
 
+/** The stored keys the panel shows: the backend choice and the local-database keys. */
+const PANEL_SETTINGS_KEYS = ['lookupBackend', ...LOCAL_DB_KEYS];
+
+/**
+ * Whether the "Cleanup pending" notice applies (§4.7 step 4, §8): the stored
+ * `localDbPendingDeletes` list is not empty.
+ * @param {{localDbPendingDeletes:string[]}} settings - The merged settings
+ * @returns {boolean}
+ */
+export const isCleanupPending = (settings) => settings.localDbPendingDeletes.length > 0;
+
 /**
  * Wire one MOUNTED panel to the document-owned client and update checker.
  *
@@ -249,11 +260,11 @@ export const LocalDbSettings = ({
  * nothing. Every callback is silenced by the returned unsubscribe.
  *
  * @param {{client:object|null, updates:object|null, onStatus:Function, onRelease:Function,
- *   onSettings:Function, readSettings?:Function}} deps - The client, the checker and the panel's setters
+ *   onSettings:Function, readSettings?:Function, watchSettings?:Function}} deps - The client, the checker and the panel's setters
  * @returns {()=>void} - Unsubscribe
  */
 export const subscribePanel = ({
-  client, updates, onStatus, onRelease, onSettings, readSettings = getSettings
+  client, updates, onStatus, onRelease, onSettings, readSettings = getSettings, watchSettings = onSettingsChanged
 }) => {
   let alive = true;
   let lastOperationId = client?.operation()?.operationId ?? null;
@@ -278,11 +289,19 @@ export const subscribePanel = ({
   const stopState = client?.onChange(onSnapshot) || (() => {});
   const stopProgress = client?.onProgress(onSnapshot) || (() => {});
   const stopRelease = updates?.subscribe((next) => alive && onRelease(next)) || (() => {});
+  // Live finding (fix 8): recovery and retirement change the record and
+  // `localDbPendingDeletes` through the worker's bridge, outside any panel
+  // operation. Every extension page — this tab and the others — learns about
+  // stored settings changes the same way, through chrome.storage.onChanged.
+  const stopSettings = watchSettings((changes) => {
+    if (alive && Object.keys(changes).some((key) => PANEL_SETTINGS_KEYS.includes(key))) refreshSettings();
+  });
   return () => {
     alive = false;
     stopState();
     stopProgress();
     stopRelease();
+    stopSettings();
   };
 };
 
@@ -378,7 +397,7 @@ export const LocalDbPanel = () => {
         operation={status.operation}
         progress={status.progress}
         update={release.update}
-        cleanupPending={settings.localDbPendingDeletes.length > 0}
+        cleanupPending={isCleanupPending(settings)}
         errorMessage={errorMessage}
         storageEstimate={storageEstimate}
         onBackendChange={async (id) => {

@@ -89,7 +89,7 @@ export const createInstaller = ({
   verifyBatchBytes = VERIFY_BATCH_BYTES,
   decompressionStream = () => new DecompressionStream('gzip'),
   stallMs = STALL_TIMEOUT_MS
-}, faults = null) => {
+}, faults) => {
   // The one mutation, reserved SYNCHRONOUSLY before the first await
   // (HOUSE_RULES 13). `phase` reaching 'committing' refuses every cancel.
   let mutation = null;

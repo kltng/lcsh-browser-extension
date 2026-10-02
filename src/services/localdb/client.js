@@ -103,7 +103,7 @@ export const createLocalDbClient = ({
   sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); }),
   onChange = () => {},
   onProgress = () => {}
-}, faults = null) => {
+}, faults) => {
   let generation = 0;
   let starts = 0;
   let crashes = 0;

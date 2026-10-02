@@ -99,7 +99,7 @@ const meteredStream = (hash, limit) => new TransformStream({
 export const streamDatabase = async ({
   entry, staging, pool, controller, isCancelled, fetchImpl, decompressionStream, stallMs, now, onProgress,
   checkpoint = async () => false
-}, wrapImportPull = null) => {
+}, wrapImportPull) => {
   // Review finding 10: the inactivity deadline starts BEFORE the fetch, so a
   // request whose headers never arrive stops the install as well; it is reset
   // only by bytes that actually arrived.
