@@ -15,6 +15,7 @@ import { toSearch, keywordText } from './searchText';
 import { normalizeLabel } from './normalize';
 import { ROUTING, matchClassOf, rankCandidates, createLocRequester } from './locShared';
 import { getPageScheduler, createRunCache } from './scheduler';
+import { KeyEchoError } from '../keyGuard';
 import { createLocalQueries, mapRow, replacementsOf, BACKEND_ID as LOCAL_DB } from './localDb';
 
 export { LOCAL_DB };
@@ -163,7 +164,18 @@ export const createCoordinator = ({ scheduler = getPageScheduler(), cache = crea
     };
 
     const locPart = async (part) => {
-      base.requests.push(requester.url(part.authority, part.q, part.searchtype));
+      let url;
+      try {
+        url = requester.url(part.authority, part.q, part.searchtype);
+      } catch (err) {
+        // Exit (a): a query that repeats an API key is never built or sent.
+        if (err instanceof KeyEchoError) {
+          base.failures.push('key_echo');
+          return { ok: false, accepted: 0 };
+        }
+        throw err;
+      }
+      base.requests.push(url);
       const value = await requester.search(part, { signal, bypass: bypassCache });
       if (!value.ok) {
         base.failures.push(value.kind);

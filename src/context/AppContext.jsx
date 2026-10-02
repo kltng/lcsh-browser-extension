@@ -1,7 +1,8 @@
 import React, { createContext, useState, useContext, useEffect, useRef, useSyncExternalStore } from 'react';
 import {
-  loadSystemPromptRules, saveSystemPromptRules, getSettings, onSettingsChanged
+  loadSystemPromptRules, saveSystemPromptRules, getSettings, onSettingsChanged, readStoredApiKeys
 } from '../services/settings';
+import { watchStoredKeys } from '../services/keyGuard';
 import { resolveConfig } from '../services/providers/index';
 import {
   initialRulesState, editRules, applyStoredRules, afterRulesSave, afterRulesReset
@@ -111,6 +112,9 @@ export const AppProvider = ({ children, localDbClient = null, localDbUpdates = n
       setRulesState((state) => applyStoredRules(state, changes.systemPromptRules.newValue));
     });
 
+    // P6 fix 13: the exit guard knows every stored key, kept current.
+    const unsubscribeKeys = watchStoredKeys({ readStoredApiKeys, onSettingsChanged });
+
     loadHistory()
       .then((entries) => { if (alive) setConversationHistory(entries); })
       .catch((err) => { if (alive) setError(err.message); });
@@ -119,6 +123,7 @@ export const AppProvider = ({ children, localDbClient = null, localDbUpdates = n
     return () => {
       alive = false;
       unsubscribeSettings();
+      unsubscribeKeys();
       unsubscribeHistory();
       workflow.dispose();
     };

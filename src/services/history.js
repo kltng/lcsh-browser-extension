@@ -4,6 +4,8 @@
  * adapter for entries saved by older versions.
  */
 import { selectionsOf } from './pipeline/run';
+import { guardExit, documentKeys } from './keyGuard';
+import { readStoredApiKeys } from './settings';
 import { imageMetadata } from './pipeline/images';
 import { makeProvenance, VIAS } from './pipeline/types';
 
@@ -276,6 +278,30 @@ export const loadHistory = async () => {
 };
 
 /**
+ * The stored entry for the exit key check, without the MARC STRUCTURE codes
+ * (tag, indicators, subfield codes). Those are fixed one-to-three-character
+ * codes from the LC authority record and our MARC builder ("a", "0", "_"),
+ * never model text; with a one-character key such as LM Studio's "a" they
+ * would refuse every save. Every subfield VALUE and every other field is
+ * still checked.
+ * @param {object} entry - Serialized-and-parsed v2 entry
+ * @returns {object}
+ */
+const withoutMarcCodes = (entry) => ({
+  ...entry,
+  recommendations: (entry.recommendations || []).map((rec) => (rec?.marc ? {
+    ...rec,
+    marc: {
+      ...rec.marc,
+      tag: null,
+      ind1: null,
+      ind2: null,
+      subfields: Array.isArray(rec.marc.subfields) ? rec.marc.subfields.map((pair) => [null, Array.isArray(pair) ? pair[1] : pair]) : rec.marc.subfields
+    }
+  } : rec))
+});
+
+/**
  * Save an entry: a locked read-modify-write; the oldest entries are evicted
  * (max 25 entries and 6 MiB) in the SAME write. Resolves after the write is confirmed.
  * @param {object} entry - v2 entry from buildHistoryEntry()
@@ -284,6 +310,11 @@ export const loadHistory = async () => {
 export const saveHistoryEntry = async (entry) => {
   const clean = rebuildV2(entry);
   if (serializedBytes(clean) > MAX_ENTRY_BYTES) throw new HistoryError('too_large');
+  // Exit (b), P6 fix 13: the FINAL entry, exactly as it will be stored
+  // (serialized and read back), is checked against every key of this
+  // document — the runs' keys and every key stored now. Nothing is written
+  // when it repeats one.
+  guardExit('history', withoutMarcCodes(JSON.parse(JSON.stringify(clean))), [...documentKeys(), ...(await readStoredApiKeys())]);
   return withHistoryLock(async () => {
     let next = [...(await readStored()), clean];
     while (next.length > 1 && (next.length > MAX_ENTRIES || serializedBytes(next) > MAX_TOTAL_BYTES)) next = next.slice(1);

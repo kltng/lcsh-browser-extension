@@ -15,7 +15,10 @@ import { getLookupBackend } from '../lookup/index';
 import { createLocRequester } from '../lookup/locApi';
 import { runSuggest } from './suggest';
 import { runLookupStep, LOOKUP_BUDGET_MS } from './lookupStep';
-import { runAiSelect, presentCandidates } from './select';
+import { runAiSelect, presentCandidates, headingComponents } from './select';
+import {
+  guardExit, rememberRunKey, setStoredKeys, keysOfSettings, documentKeys, KeyEchoError
+} from '../keyGuard';
 import { candidateLimit } from './budget';
 import { imageMetadata } from './images';
 import { logWorkflowError } from './logging';
@@ -31,7 +34,23 @@ const provenanceOf = (cfg) => (cfg ? { providerId: cfg.providerId, model: cfg.mo
 const isCancel = (err) => err?.kind === 'cancelled';
 const toError = (err) => ({
   kind: err?.kind || 'unknown',
-  message: err instanceof ProviderError || err instanceof LookupError ? err.message : 'Something went wrong. Try again.'
+  message: err instanceof ProviderError || err instanceof LookupError || err instanceof KeyEchoError
+    ? err.message : 'Something went wrong. Try again.'
+});
+
+/**
+ * Exit (d), P6 fix 13: every value of a suggest result that the UI can show,
+ * AFTER all derivation — the analysis, each heading, kind and reason, and
+ * every subdivision headingComponents() can later report as "dropped" (the
+ * ORIGINAL component text; that is what subdivisionInfo() reports).
+ * @param {{subjectAnalysis:string, suggestions:object[]}} result - runSuggest() result
+ * @returns {object}
+ */
+export const displayedSuggestValues = (result) => ({
+  subjectAnalysis: result.subjectAnalysis,
+  suggestions: result.suggestions.map((s) => ({
+    heading: s.heading, kind: s.kind, reason: s.reason, components: headingComponents(s.heading).original
+  }))
 });
 
 /**
@@ -68,6 +87,18 @@ export const createWorkflow = ({
   let state = initialRunState();
   // The lookup backend (and its per-run cache) belongs to one run.
   let runBackend = { runId: null, backend: null, cfg: null };
+  // The keys of the providers THIS run used (its suggest and select
+  // snapshots), in memory only — never in the run state, so never in history.
+  let runKeys = { runId: null, keys: [] };
+  const useKey = (runId, cfg) => {
+    const key = typeof cfg?.apiKey === 'string' ? cfg.apiKey : '';
+    if (!key) return;
+    rememberRunKey(key);
+    runKeys = runKeys.runId === runId
+      ? { runId, keys: [...new Set([...runKeys.keys, key])] }
+      : { runId, keys: [key] };
+  };
+  const currentRunKeys = () => (runKeys.runId === state.run.runId ? runKeys.keys : []);
   const listeners = new Set();
   const controllers = { suggest: null, lookup: new Set(), select: null, nameKeys: null };
 
@@ -147,10 +178,14 @@ export const createWorkflow = ({
     try {
       const { cfg, settings } = await loadConfig();
       if (!owns()) return;
+      useKey(begun.token.runId, cfg);
+      setStoredKeys(keysOfSettings(settings));
       update((s) => setSuggestSnapshot(s, begun.token, provenanceOf(cfg)));
       runBackend = { runId: begun.token.runId, backend: createBackend(settings), cfg };
       const result = await runSuggest({ cfg, bibliographicInfo, rules, signal: controller.signal, generateImpl });
       if (!owns()) return;
+      // Exit (d): nothing that repeats the run's key is stored for display.
+      guardExit('display', displayedSuggestValues(result), currentRunKeys());
       update((s) => commitSuggest(s, begun.token, result));
     } catch (err) {
       logWorkflowError('Error generating suggestions:', err);
@@ -208,6 +243,7 @@ export const createWorkflow = ({
     try {
       const { cfg } = await loadConfig();
       if (!owns()) return;
+      useKey(begun.token.runId, cfg);
       update((s) => setSelectSnapshot(s, begun.token, provenanceOf(cfg)));
       const result = await runAiSelect({ cfg, bibliographicInfo: input, suggestions, results, signal: controller.signal, generateImpl });
       if (!owns()) return;
@@ -249,6 +285,18 @@ export const createWorkflow = ({
 
   return {
     getState: () => state,
+    /**
+     * The shared exit guard with this run's keys (P6 fix 13): `export` and
+     * `display` check the keys of the providers this run used; `lookup` and
+     * `history` also check every stored key and every earlier run's key.
+     * Throws KeyEchoError (local text) when `value` repeats a key.
+     * @param {'lookup'|'history'|'export'|'display'} exit - The exit
+     * @param {any} value - Exactly what leaves
+     * @returns {any} - `value`
+     */
+    guard: (exit, value) => guardExit(
+      exit, value, exit === 'lookup' || exit === 'history' ? [...currentRunKeys(), ...documentKeys()] : currentRunKeys()
+    ),
     subscribe: (listener) => {
       listeners.add(listener);
       return () => listeners.delete(listener);

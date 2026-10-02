@@ -11,6 +11,7 @@ import {
   runViewOf, adaptLegacyEntry, legacyMarcCopyText, LEGACY_HEADER, LEGACY_MARC_LABEL, LEGACY_TEXT_LABEL
 } from '../services/history';
 import { getSimilarityColor } from '../utils/similarityUtils';
+import { guardExit, documentKeys, KeyEchoError } from '../services/keyGuard';
 import { SuggestionsPanel } from './InitialSuggestions';
 import { MatchesPanel } from './ScrapedResults';
 import { RecommendationsPanel } from './FinalRecommendations';
@@ -146,7 +147,15 @@ const ConversationHistory = () => {
     clearConversationHistory().catch((err) => setError(err?.message || 'The history could not be cleared.'));
   };
 
+  // Exit (c), P6 fix 13: an old entry has no run snapshot, so its copied
+  // text is checked against every key this document knows.
   const handleCopy = (text) => {
+    try {
+      guardExit('export', text, documentKeys());
+    } catch (err) {
+      setSnackbar(err instanceof KeyEchoError ? err.message : 'The text could not be copied.');
+      return;
+    }
     navigator.clipboard.writeText(text)
       .then(() => setSnackbar('Copied to clipboard'))
       .catch(() => setSnackbar('Failed to copy to clipboard'));

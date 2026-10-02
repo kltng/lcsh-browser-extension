@@ -6,6 +6,7 @@
  * Tabs do not share the queue (documented P4 limitation).
  */
 import { parseRetryAfter } from '../providers/http';
+import { KEY_ECHO_MESSAGES } from '../keyGuard';
 
 export const LOC_USER_AGENT = 'LCSH-Browser-Extension/1.1 (https://github.com/kltng/lcsh-browser-extension)';
 
@@ -15,6 +16,8 @@ const MESSAGES = {
   rate_limit: 'id.loc.gov asked for fewer requests (rate limit). Try again in a minute.',
   server: 'id.loc.gov returned an error. Try again later.',
   invalid_output: 'id.loc.gov returned an answer in an unexpected format.',
+  // P6 fix 13, exit (a): the query was refused before it was built.
+  key_echo: KEY_ECHO_MESSAGES.lookup,
   cancelled: 'Cancelled.'
 };
 

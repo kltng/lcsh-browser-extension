@@ -10,6 +10,7 @@ import { subdivisionNote } from '../services/pipeline/select';
 import { copyAllText, recommendationsCsv, marcUnavailableText } from '../services/pipeline/exports';
 import { NONE_REASON_WORDS } from '../services/pipeline/types';
 import { needsNameKey } from '../services/pipeline/nameKeys';
+import { KeyEchoError } from '../services/keyGuard';
 import { methodText, authorityLabel, lcLink, viaNote } from './pipelineText';
 
 /**
@@ -100,14 +101,27 @@ const FinalRecommendations = () => {
   const recommendations = run.recommendations || [];
   const selections = selectionsOf(run);
 
+  // Exit (c), P6 fix 13: the FINAL text is checked before it leaves.
+  const guardedText = (text) => {
+    try {
+      return workflow.guard('export', text);
+    } catch (err) {
+      setSnackbar(err instanceof KeyEchoError ? err.message : 'The text could not be exported.');
+      return null;
+    }
+  };
+
   const handleCopy = (text) => {
+    if (guardedText(text) === null) return;
     navigator.clipboard.writeText(text)
       .then(() => setSnackbar('Copied to clipboard'))
       .catch(() => setSnackbar('Failed to copy to clipboard'));
   };
 
   const handleExportCsv = () => {
-    const blob = new Blob([recommendationsCsv(recommendations, selections)], { type: 'text/csv;charset=utf-8;' });
+    const csv = guardedText(recommendationsCsv(recommendations, selections));
+    if (csv === null) return;
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     try {
       const link = document.createElement('a');

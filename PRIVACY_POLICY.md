@@ -1,13 +1,13 @@
 # Privacy Policy — LCSH Recommendation Tool
 
-Last updated: 27 September 2026
+Last updated: 2 October 2026
 
 ## In short
 
 - Everything you type stays on your computer, except what is sent to the AI
   provider **you choose** and to the Library of Congress to look up headings.
-- Your API keys are kept on your computer and are sent only to the provider
-  they belong to.
+- Your API keys are kept on your computer. The extension uses a key only to
+  sign in to the server address you entered it for (see "API keys" below).
 - The extension has no server. It collects no analytics and no telemetry.
 - If you choose the on-device model (Gemini Nano), your text is not sent
   anywhere at all for the suggestion step.
@@ -81,13 +81,17 @@ details of any download, such as your IP address.
 Everything is stored by Chrome on your computer:
 
 - **API keys** — in the extension's local storage. The extension sends a key
-  only to the server address it was entered for, always in a request header,
-  never in a web address; if you change the address, the key is cleared. The
-  extension never writes a key into your history, exported files or error
-  messages itself. It also refuses an AI answer that repeats your key. For
-  very short keys (under 8 characters, such as a local LM Studio key) this
-  check cannot catch a copy hidden inside a longer word, so use a key of
-  8 or more characters if the AI service is not on your own computer.
+  only as a sign-in header to the server you entered it for, never in a web
+  address. If you change the server (another host, port or http/https), the
+  key is cleared and you enter it again. The extension never writes a key
+  into your history, exported files or error messages.
+  One limit: an AI service could repeat your key inside its answer. The
+  extension checks every answer, and everything it would show, save, export
+  or search at the Library of Congress, and stops if it finds your key. This
+  check is reliable for keys of 8 or more characters. A very short key (such
+  as the one-letter key often used with a local LM Studio) cannot be told
+  apart from ordinary words, so use a long key for any AI service that is not
+  on your own computer.
 - **Your settings** — the provider and model you chose, your cataloguing
   rules, and which lookup source you use.
 - **History** — the records you save, including the headings, their Library

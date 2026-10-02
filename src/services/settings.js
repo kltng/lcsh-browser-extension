@@ -123,6 +123,19 @@ export const ready = () => {
 };
 
 /**
+ * Every API key stored now, for the exit key guard (P6 fix 13): the key of
+ * every provider and a not-yet-migrated legacy Gemini key. A plain read: no
+ * migration and no lock, so it never writes anything.
+ * @returns {Promise<string[]>}
+ */
+export const readStoredApiKeys = async () => {
+  const all = await storage().get([...PROVIDERS.map((p) => providerKey(p.id)), LEGACY_KEY]);
+  const keys = PROVIDERS.map((p) => all[providerKey(p.id)]?.apiKey);
+  keys.push(all[LEGACY_KEY]);
+  return keys.filter((k) => typeof k === 'string' && k.trim()).map((k) => k.trim());
+};
+
+/**
  * Merged view of all settings, with defaults.
  * @returns {Promise<{settingsVersion:number, activeProviderId:string, providers:Object<string,object>,
  *   modelMeta:Object<string,object>, systemPromptRules:string|null, lookupBackend:string}>}

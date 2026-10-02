@@ -4,6 +4,7 @@
  * The message is always written here, from a template. The constructor never
  * receives response bodies, headers or request data, and no `cause` is kept.
  */
+import { valueHasKey } from '../keyGuard';
 
 const RETRYABLE = new Set(['rate_limit', 'server', 'overloaded', 'timeout', 'network']);
 
@@ -91,18 +92,6 @@ export const errorFromStatus = (status, ctx) => {
   return new ProviderError('bad_request', withStatus);
 };
 
-const isAlphanumeric = (ch) => /^[\p{L}\p{N}]$/u.test(ch);
-
-/** Whether `text` contains `key` as a whole token: no letter or digit right before or after it. */
-const containsToken = (text, key) => {
-  for (let at = text.indexOf(key); at !== -1; at = text.indexOf(key, at + 1)) {
-    const before = at > 0 ? text[at - 1] : '';
-    const after = text[at + key.length] ?? '';
-    if (!(before && isAlphanumeric(before)) && !(after && isAlphanumeric(after))) return true;
-  }
-  return false;
-};
-
 /**
  * Throw `invalid_output` when a consumed response value gives the request's
  * non-empty API key back. Run it before a value is returned, cached,
@@ -114,32 +103,15 @@ const containsToken = (text, key) => {
  *    token (bounded by start/end or a character that is not a letter or digit);
  *  - 1 character (for example LM Studio's "a"): a string value EQUALS the key
  *    after trimming.
+ * The matching itself is the shared keyGuard matcher (one implementation of
+ * the length rules for the raw answer and for every exit).
  * @param {object} cfg - ProviderConfig (its apiKey is the secret)
  * @param {any} value - Parsed response data or answer text
  */
 export const rejectEchoedKey = (cfg, value) => {
   const key = typeof cfg?.apiKey === 'string' ? cfg.apiKey : '';
   if (key.length === 0) return;
-  let matchesValue;
-  let matchesName;
-  if (key.length >= 8) {
-    matchesValue = (text) => text.includes(key);
-    matchesName = matchesValue;
-  } else if (key.length >= 2) {
-    matchesValue = (text) => containsToken(text, key);
-    matchesName = matchesValue;
-  } else {
-    matchesValue = (text) => text.trim() === key;
-    matchesName = () => false;
-  }
-  const seen = new Set();
-  const walk = (v) => {
-    if (typeof v === 'string') return matchesValue(v);
-    if (!v || typeof v !== 'object' || seen.has(v)) return false;
-    seen.add(v);
-    return Object.entries(v).some(([k, x]) => matchesName(k) || walk(x));
-  };
-  if (walk(value)) throw new ProviderError('invalid_output', errorContext(cfg));
+  if (valueHasKey(value, [key])) throw new ProviderError('invalid_output', errorContext(cfg));
 };
 
 /**

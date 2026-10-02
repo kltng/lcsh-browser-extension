@@ -41,7 +41,7 @@ export const MATCH_CLASSES = ['exact-full', 'exact-main', 'prefix-full', 'prefix
 /** §2 lists five reasons; §5.4/§5.5 add 'manual-none' for "Use none". */
 export const NONE_REASONS = ['lookup-failed', 'no-results', 'ai-chose-none', 'ai-unavailable', 'not-chosen', 'manual-none'];
 /** `local_db` is the P5 kind of a failed local part (SPEC-P5 §6.4). */
-export const LOOKUP_ERROR_KINDS = ['network', 'timeout', 'rate_limit', 'server', 'invalid_output', 'cancelled', 'local_db'];
+export const LOOKUP_ERROR_KINDS = ['network', 'timeout', 'rate_limit', 'server', 'invalid_output', 'cancelled', 'local_db', 'key_echo'];
 export const SOURCES = ['loc-api', 'local-db'];
 export const VIAS = ['label', 'variant', 'replacement'];
 /** Backends a lookup result can name (SPEC-P5 §6.4). */

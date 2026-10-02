@@ -10,6 +10,7 @@
 import { normalizeLabel } from './normalize';
 import { parseSuggestBody } from './hit';
 import { LookupError, getPageScheduler, createRunCache } from './scheduler';
+import { guardExit, documentKeys, KeyEchoError } from '../keyGuard';
 
 export const BACKEND_ID = 'loc-api';
 
@@ -37,9 +38,13 @@ export const SEARCH_COUNT = 10;
  * @param {'lcsh'|'lcnaf'|'lcgft'} authority - Authority
  * @param {string} q - Query
  * @param {'leftanchored'|'keyword'} searchtype - Search type
- * @returns {string}
+ * @returns {string} - Throws KeyEchoError when the query repeats an API key
  */
 export const buildSearchUrl = (authority, q, searchtype) => {
+  // Exit (a), P6 fix 13: the FINAL query, after every normalization, is
+  // checked against every key of this document (the runs' keys and every
+  // stored key). This is the only function that builds an id.loc.gov URL.
+  guardExit('lookup', q, documentKeys());
   const params = new URLSearchParams({ q, count: String(SEARCH_COUNT), searchtype });
   return `${ENDPOINTS[authority]}?${params}`;
 };
@@ -136,7 +141,13 @@ export const createLocRequester = ({ scheduler = getPageScheduler(), cache = cre
      * @returns {Promise<{ok:boolean, url:string, candidates:object[], rejectedHits:number, kind?:string}>}
      */
     async search({ authority, q, searchtype }, { signal, bypass = false } = {}) {
-      const url = buildSearchUrl(authority, q, searchtype);
+      let url;
+      try {
+        url = buildSearchUrl(authority, q, searchtype);
+      } catch (err) {
+        if (err instanceof KeyEchoError) return { ok: false, url: null, candidates: [], rejectedHits: 0, kind: 'key_echo' };
+        throw err;
+      }
       try {
         const value = await fetchAccepted(url, authority, { signal, bypass });
         return { ok: true, url, candidates: value.candidates, rejectedHits: value.rejectedHits };
